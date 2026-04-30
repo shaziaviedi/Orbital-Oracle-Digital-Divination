@@ -8,19 +8,39 @@ import * as THREE_MODULE from "https://cdn.jsdelivr.net/npm/three@0.165.0/build/
 let THREE_NS = null;
 
 // Motion tuning kept explicit for easy classroom tweaking.
-const IDLE_ROTATION_SPEED_Y = 0.00026;
-const IDLE_ROTATION_SPEED_X = 0.00005;
+const IDLE_ROTATION_SPEED_Y = 0.00062;
+const IDLE_ROTATION_SPEED_X = 0.00013;
 const ROTATION_IMPULSE_X = 0.22;
 const ROTATION_IMPULSE_Y = 0.24;
 const ROTATION_DAMPING = 0.982;
 const MAX_ANGULAR_VELOCITY = 0.016;
 const MIN_ANGULAR_VELOCITY = 0.00003;
-const TRAIL_FADE_MS = 1100;
-const TRAIL_MAX_SAMPLES = 170;
-const SUMMON_PARTICLE_LIFE_MS = 620;
-const SUMMON_PARTICLE_MAX = 140;
-const SUMMON_LINK_DISTANCE = 0.14;
-const SUMMON_MAX_LINKS = 340;
+const STARFIELD_COUNT = 620;
+const STARFIELD_CORE_SIZE = 0.039;
+const STARFIELD_GLOW_SIZE = 0.115;
+const STARFIELD_HALO_SIZE = 0.165;
+const STARFIELD_CORE_OPACITY = 0.7;
+const STARFIELD_GLOW_OPACITY = 0.25;
+const STARFIELD_HALO_OPACITY = 0.105;
+const STARFIELD_MIN_RADIUS = 0.9;
+const STARFIELD_MAX_RADIUS = 2.2;
+const STARFIELD_ENV_SCALE = 1.0;
+const STARFIELD_RADIUS_FALLOFF = 2.45;
+const TRAIL_SCATTER_JITTER = 0.011;
+const PARTICLE_SIZE = 0.085;
+const PARTICLE_LIFETIME = 4200;
+const SPAWN_RATE = 135; // Particles per second while drawing.
+const INITIAL_VELOCITY_RANGE = { min: 0.00055, max: 0.00195 };
+const OUTWARD_SEPARATION_FORCE = 0.00042;
+const TURBULENCE_FREQUENCY = 0.0054;
+const TURBULENCE_AMPLITUDE = 0.00026;
+const PARTICLE_FRICTION = 0.988;
+const LINK_WIDTH = 1.4;
+const MAX_LINK_DISTANCE = 0.22;
+const SUMMON_MAX_LINKS = 900;
+const FAST_MOVE_DISTANCE = 0.055;
+const INTERPOLATION_STEPS_ON_FAST_MOVE = 7;
+const TRAIL_MAX_SAMPLES = 1200;
 
 const sceneState = {
   container: null,
@@ -43,12 +63,15 @@ const sceneState = {
   summonTrailLine: null,
   summonTrailLayer: null,
   summonTrailMaterial: null,
-  summonTrailSamples: [],
+  summonParticles: [],
   summonGlowTexture: null,
-  summonEmberCloud: null,
-  summonEmberParticles: [],
   summonSpark: null,
   summonTrailLocked: false,
+  lastTrailUpdateMs: null,
+  emitterState: {
+    index: null,
+    middle: null,
+  },
   constellationGroup: null,
   constellationLineMaterial: null,
   constellationDimCurrent: 0,
@@ -58,6 +81,9 @@ const sceneState = {
   motionPaused: false,
   lastFrameMs: null,
   starfield: null,
+  starfieldCoreMaterial: null,
+  starfieldGlowMaterial: null,
+  starfieldHaloMaterial: null,
   resizeHandler: null,
 };
 
@@ -72,17 +98,146 @@ function clearSummonTrailGeometry() {
   }
 }
 
+function randomRange(min, max) {
+  return min + Math.random() * (max - min);
+}
+
+function emitTrailParticle({
+  position,
+  nowMs,
+  source = "index",
+  direction = null,
+  jitterAmount = TRAIL_SCATTER_JITTER,
+  velocityScale = 1,
+}) {
+  if (!position) return;
+  const jittered = position.clone().add(
+    new THREE_NS.Vector3(
+      (Math.random() - 0.5) * jitterAmount,
+      (Math.random() - 0.5) * jitterAmount,
+      (Math.random() - 0.5) * jitterAmount * 0.5,
+    ),
+  );
+  const baseDirection =
+    direction && direction.lengthSq() > 0.000001
+      ? direction.clone().normalize()
+      : new THREE_NS.Vector3(Math.random() - 0.5, Math.random() - 0.5, (Math.random() - 0.5) * 0.3)
+          .normalize();
+  const speed = randomRange(INITIAL_VELOCITY_RANGE.min, INITIAL_VELOCITY_RANGE.max) * velocityScale;
+  const sourceSkew =
+    source === "index"
+      ? new THREE_NS.Vector3(0.00026, 0.00014, 0)
+      : source === "middle"
+        ? new THREE_NS.Vector3(-0.00026, -0.00014, 0)
+        : new THREE_NS.Vector3(0, 0, 0);
+  sceneState.summonParticles.push({
+    position: jittered,
+    velocity: baseDirection
+      .multiplyScalar(speed)
+      .add(
+        new THREE_NS.Vector3(
+          (Math.random() - 0.5) * INITIAL_VELOCITY_RANGE.min,
+          (Math.random() - 0.5) * INITIAL_VELOCITY_RANGE.min,
+          (Math.random() - 0.5) * INITIAL_VELOCITY_RANGE.min * 0.4,
+        ),
+      )
+      .add(sourceSkew),
+    origin: position.clone(),
+    birthMs: nowMs,
+    lifetimeMs: PARTICLE_LIFETIME * randomRange(0.88, 1.12),
+    source,
+    seed: Math.random() * Math.PI * 2,
+  });
+  if (sceneState.summonParticles.length > TRAIL_MAX_SAMPLES) {
+    sceneState.summonParticles.splice(0, sceneState.summonParticles.length - TRAIL_MAX_SAMPLES);
+  }
+}
+
+function spawnFromEmitter({
+  source,
+  currentPoint,
+  nowMs,
+  fallbackDirection = null,
+}) {
+  if (!currentPoint) return;
+  const previous = sceneState.emitterState[source];
+  if (!previous) {
+    sceneState.emitterState[source] = { point: currentPoint.clone(), t: nowMs };
+    emitTrailParticle({
+      position: currentPoint,
+      nowMs,
+      source,
+      direction: fallbackDirection,
+      jitterAmount: 0,
+      velocityScale: 1.1,
+    });
+    return;
+  }
+
+  const elapsedMs = Math.max(8, nowMs - previous.t);
+  const delta = currentPoint.clone().sub(previous.point);
+  const distance = delta.length();
+  const motionDirection =
+    distance > 0.0001 ? delta.clone().normalize() : fallbackDirection?.clone() ?? new THREE_NS.Vector3(0, 1, 0);
+  const baseSpawnCount = Math.max(1, Math.round((elapsedMs / 1000) * SPAWN_RATE));
+  const interpolationCount =
+    distance > FAST_MOVE_DISTANCE
+      ? Math.min(INTERPOLATION_STEPS_ON_FAST_MOVE, Math.max(1, Math.floor(distance / FAST_MOVE_DISTANCE)))
+      : 0;
+  const totalSteps = Math.max(baseSpawnCount, interpolationCount + 1);
+
+  for (let i = 0; i < totalSteps; i += 1) {
+    const alpha = totalSteps === 1 ? 1 : i / (totalSteps - 1);
+    const spawnPoint = previous.point.clone().lerp(currentPoint, alpha);
+    emitTrailParticle({
+      position: spawnPoint,
+      nowMs: nowMs - (totalSteps - i) * 4,
+      source,
+      direction: motionDirection,
+      jitterAmount: i <= 1 ? 0 : TRAIL_SCATTER_JITTER,
+      velocityScale: 1 + distance * 10,
+    });
+  }
+
+  sceneState.emitterState[source] = { point: currentPoint.clone(), t: nowMs };
+}
+
 function rebuildSummonTrailGeometry(nowMs) {
   if (!sceneState.summonTrailLine || !sceneState.summonTrailMaterial || !sceneState.summonTrailLayer) {
     return;
   }
-  if (!sceneState.summonTrailLocked) {
-    const cutoff = nowMs - TRAIL_FADE_MS;
-    sceneState.summonTrailSamples = sceneState.summonTrailSamples.filter((sample) => sample.t >= cutoff);
+  const dtMs = sceneState.lastTrailUpdateMs == null ? 16.67 : Math.max(8, Math.min(40, nowMs - sceneState.lastTrailUpdateMs));
+  sceneState.lastTrailUpdateMs = nowMs;
+  const dtScale = dtMs / 16.67;
+
+  // Particles own their motion: drift outward, separate, and keep lively turbulence.
+  for (const particle of sceneState.summonParticles) {
+    if (!sceneState.summonTrailLocked) {
+      const lifeMs = Math.max(0, nowMs - particle.birthMs);
+      const lifeRatio = clamp01(lifeMs / Math.max(particle.lifetimeMs ?? PARTICLE_LIFETIME, 1));
+      const outward = particle.position.clone().sub(particle.origin ?? particle.position);
+      if (outward.lengthSq() > 0.0000001) {
+        const separationGain = lifeRatio < 0.35 ? 0.16 + lifeRatio * 0.4 : 0.3 + lifeRatio * 0.95;
+        outward.normalize().multiplyScalar(OUTWARD_SEPARATION_FORCE * separationGain);
+        particle.velocity.addScaledVector(outward, dtScale);
+      }
+      const turbulencePhase = lifeMs * TURBULENCE_FREQUENCY + particle.seed;
+      const turbulence = TURBULENCE_AMPLITUDE * (0.22 + lifeRatio * 0.82);
+      particle.velocity.x += Math.cos(turbulencePhase * 1.1) * turbulence;
+      particle.velocity.y += Math.sin(turbulencePhase * 1.7) * turbulence;
+      particle.velocity.z += Math.cos(turbulencePhase * 0.8) * turbulence * 0.35;
+      particle.position.addScaledVector(particle.velocity, dtScale);
+      particle.velocity.multiplyScalar(PARTICLE_FRICTION ** dtScale);
+    }
   }
+  sceneState.summonParticles = sceneState.summonParticles.filter((particle) => {
+    const lifetime = particle.lifetimeMs ?? PARTICLE_LIFETIME;
+    return nowMs - particle.birthMs <= lifetime;
+  });
+
   const pointPositions = [];
-  for (const sample of sceneState.summonTrailSamples) {
-    pointPositions.push(sample.position.x, sample.position.y, sample.position.z);
+  for (const particle of sceneState.summonParticles) {
+    pointPositions.push(particle.position.x, particle.position.y, particle.position.z);
   }
   sceneState.summonTrailLayer.geometry.setAttribute(
     "position",
@@ -94,14 +249,22 @@ function rebuildSummonTrailGeometry(nowMs) {
   // Linked-filament look: connect nearby recent points into luminous segments.
   const segmentPositions = [];
   let linkCount = 0;
-  const samples = sceneState.summonTrailSamples;
-  for (let i = 0; i < samples.length; i += 1) {
-    const a = samples[i];
-    for (let j = i + 1; j < samples.length; j += 1) {
-      const b = samples[j];
+  const particles = sceneState.summonParticles;
+  for (let i = 0; i < particles.length; i += 1) {
+    const a = particles[i];
+    const aAge = nowMs - a.birthMs;
+    const aLife = Math.max(1, a.lifetimeMs ?? PARTICLE_LIFETIME);
+    const aRatio = aAge / aLife;
+    if (aRatio > 0.96) continue;
+    for (let j = i + 1; j < particles.length; j += 1) {
+      const b = particles[j];
       if (linkCount >= SUMMON_MAX_LINKS) break;
+      const bAge = nowMs - b.birthMs;
+      const bLife = Math.max(1, b.lifetimeMs ?? PARTICLE_LIFETIME);
+      const bRatio = bAge / bLife;
+      if (bRatio > 0.96) continue;
       const d = a.position.distanceTo(b.position);
-      if (d <= SUMMON_LINK_DISTANCE) {
+      if (d <= MAX_LINK_DISTANCE) {
         segmentPositions.push(a.position.x, a.position.y, a.position.z);
         segmentPositions.push(b.position.x, b.position.y, b.position.z);
         linkCount += 1;
@@ -115,51 +278,43 @@ function rebuildSummonTrailGeometry(nowMs) {
   );
   sceneState.summonTrailLine.geometry.computeBoundingSphere();
   sceneState.summonTrailLine.visible = linkCount > 0;
+  // Note: Line width support varies by platform/WebGL implementation.
+  sceneState.summonTrailMaterial.linewidth = LINK_WIDTH;
 
   if (!sceneState.summonTrailLocked) {
-    sceneState.summonTrailMaterial.opacity = sceneState.summonTrailSamples.length > 0 ? 0.42 : 0;
+    sceneState.summonTrailMaterial.opacity = sceneState.summonParticles.length > 0 ? 0.5 : 0;
     sceneState.summonTrailLayer.material.opacity =
-      sceneState.summonTrailSamples.length > 0
-        ? Math.min(0.96, 0.35 + sceneState.summonTrailSamples.length / 220)
+      sceneState.summonParticles.length > 0
+        ? Math.min(0.98, 0.42 + sceneState.summonParticles.length / 360)
         : 0;
   }
 }
 
-function rebuildSummonEmberGeometry(nowMs) {
-  if (!sceneState.summonEmberCloud) return;
-  sceneState.summonEmberParticles = sceneState.summonEmberParticles
-    .map((particle) => ({
-      ...particle,
-      position: particle.position.clone().add(particle.velocity),
-    }))
-    .filter((particle) => particle.expireAt > nowMs);
-
-  const positions = [];
-  for (const particle of sceneState.summonEmberParticles) {
-    positions.push(particle.position.x, particle.position.y, particle.position.z);
-  }
-  sceneState.summonEmberCloud.geometry.setAttribute(
-    "position",
-    new THREE_NS.Float32BufferAttribute(positions, 3),
-  );
-  sceneState.summonEmberCloud.visible = positions.length > 0;
-  sceneState.summonEmberCloud.material.opacity = Math.min(
-    0.92,
-    0.2 + sceneState.summonEmberParticles.length / 240,
-  );
-}
-
 function toMirroredRitualPoint(point) {
   if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return null;
+  const { camera } = sceneState;
   const mirroredX = 1 - point.x;
-  return new THREE_NS.Vector3((mirroredX - 0.5) * 2.3, -(point.y - 0.5) * 2.3, 0.08);
+  if (!camera) {
+    return new THREE_NS.Vector3((mirroredX - 0.5) * 2.3, -(point.y - 0.5) * 2.3, 0.08);
+  }
+  // Project mirrored normalized fingertip onto ritual plane for exact overlay alignment.
+  const ndc = new THREE_NS.Vector3(mirroredX * 2 - 1, -(point.y * 2 - 1), 0.5);
+  ndc.unproject(camera);
+  const direction = ndc.sub(camera.position).normalize();
+  const targetZ = 0.08;
+  const denom = direction.z;
+  if (Math.abs(denom) < 0.0001) {
+    return new THREE_NS.Vector3((mirroredX - 0.5) * 2.3, -(point.y - 0.5) * 2.3, targetZ);
+  }
+  const t = (targetZ - camera.position.z) / denom;
+  return camera.position.clone().add(direction.multiplyScalar(t));
 }
 
 function anchorRitualCircleToTrail() {
-  if (!sceneState.ritualCircleGroup || sceneState.summonTrailSamples.length < 8) return;
+  if (!sceneState.ritualCircleGroup || sceneState.summonParticles.length < 8) return;
   let sumX = 0;
   let sumY = 0;
-  const pts = sceneState.summonTrailSamples.map((sample) => sample.position);
+  const pts = sceneState.summonParticles.map((sample) => sample.position);
   for (const point of pts) {
     sumX += point.x;
     sumY += point.y;
@@ -211,6 +366,32 @@ function createSoftGlowTexture() {
   return texture;
 }
 
+function createStarGlowTexture() {
+  const size = 128;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  const gradient = ctx.createRadialGradient(
+    size * 0.5,
+    size * 0.5,
+    0,
+    size * 0.5,
+    size * 0.5,
+    size * 0.5,
+  );
+  gradient.addColorStop(0, "rgba(255,255,255,1)");
+  gradient.addColorStop(0.2, "rgba(216,232,255,0.8)");
+  gradient.addColorStop(0.52, "rgba(154,186,255,0.24)");
+  gradient.addColorStop(1, "rgba(120,155,255,0)");
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, size, size);
+  const texture = new THREE_NS.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+  return texture;
+}
+
 function clamp01(value) {
   return Math.max(0, Math.min(1, value));
 }
@@ -226,28 +407,65 @@ function easeInOutSine(t) {
 }
 
 function createStarfield() {
-  const starCount = 650;
+  const starCount = STARFIELD_COUNT;
   const positions = new Float32Array(starCount * 3);
 
   for (let i = 0; i < starCount; i += 1) {
     const i3 = i * 3;
-    positions[i3] = (Math.random() - 0.5) * 26;
-    positions[i3 + 1] = (Math.random() - 0.5) * 26;
-    positions[i3 + 2] = -Math.random() * 30 - 2;
+    // Dense near constellation, sparser farther away for aura-like distribution.
+    const angle = Math.random() * Math.PI * 2;
+    const inclination = Math.acos(1 - 2 * Math.random());
+    const radius =
+      STARFIELD_MIN_RADIUS +
+      (STARFIELD_MAX_RADIUS - STARFIELD_MIN_RADIUS) *
+        Math.pow(Math.random(), STARFIELD_RADIUS_FALLOFF);
+    positions[i3] = Math.cos(angle) * Math.sin(inclination) * radius;
+    positions[i3 + 1] = Math.sin(angle) * Math.sin(inclination) * radius * 0.9;
+    positions[i3 + 2] = Math.cos(inclination) * radius * 0.8;
   }
 
   const geometry = new THREE_NS.BufferGeometry();
   geometry.setAttribute("position", new THREE_NS.BufferAttribute(positions, 3));
 
-  const material = new THREE_NS.PointsMaterial({
+  const coreMaterial = new THREE_NS.PointsMaterial({
     color: 0xaebfff,
-    size: 0.035,
+    size: STARFIELD_CORE_SIZE,
     transparent: true,
-    opacity: 0.6,
+    opacity: STARFIELD_CORE_OPACITY,
     depthWrite: false,
+    blending: THREE_NS.AdditiveBlending,
+  });
+  const glowMaterial = new THREE_NS.PointsMaterial({
+    color: 0xa7c1ff,
+    size: STARFIELD_GLOW_SIZE,
+    transparent: true,
+    opacity: STARFIELD_GLOW_OPACITY,
+    depthWrite: false,
+    map: createStarGlowTexture(),
+    alphaTest: 0.02,
+    blending: THREE_NS.AdditiveBlending,
+  });
+  const haloMaterial = new THREE_NS.PointsMaterial({
+    color: 0x9bb8ff,
+    size: STARFIELD_HALO_SIZE,
+    transparent: true,
+    opacity: STARFIELD_HALO_OPACITY,
+    depthWrite: false,
+    map: createStarGlowTexture(),
+    alphaTest: 0.01,
+    blending: THREE_NS.AdditiveBlending,
   });
 
-  return new THREE_NS.Points(geometry, material);
+  const group = new THREE_NS.Group();
+  group.scale.set(STARFIELD_ENV_SCALE, STARFIELD_ENV_SCALE, STARFIELD_ENV_SCALE);
+  const corePoints = new THREE_NS.Points(geometry, coreMaterial);
+  const glowPoints = new THREE_NS.Points(geometry.clone(), glowMaterial);
+  const haloPoints = new THREE_NS.Points(geometry.clone(), haloMaterial);
+  group.add(haloPoints, glowPoints, corePoints);
+  sceneState.starfieldCoreMaterial = coreMaterial;
+  sceneState.starfieldGlowMaterial = glowMaterial;
+  sceneState.starfieldHaloMaterial = haloMaterial;
+  return group;
 }
 
 function createRitualCircleGroup() {
@@ -504,6 +722,16 @@ export function createConstellationFromData(data) {
   }
 
   group.add(createConstellationLinks(positions));
+  if (sceneState.starfield) {
+    sceneState.starfield.visible = true;
+    sceneState.starfield.position.set(0, 0, 0);
+    sceneState.starfield.rotation.set(0, 0, 0);
+    sceneState.starfield.scale.set(STARFIELD_ENV_SCALE, STARFIELD_ENV_SCALE, STARFIELD_ENV_SCALE);
+    if (sceneState.starfield.parent) {
+      sceneState.starfield.parent.remove(sceneState.starfield);
+    }
+    group.add(sceneState.starfield);
+  }
 
   group.visible = false;
   group.scale.set(0.9, 0.9, 0.9);
@@ -619,7 +847,7 @@ export function initThreeScene(container) {
     new THREE_NS.BufferGeometry(),
     new THREE_NS.PointsMaterial({
       color: 0xffd8a7,
-      size: 0.052,
+      size: PARTICLE_SIZE,
       transparent: true,
       opacity: 0.0,
       depthWrite: false,
@@ -630,21 +858,6 @@ export function initThreeScene(container) {
   );
   sceneState.summonTrailLayer.visible = false;
   sceneState.scene.add(sceneState.summonTrailLayer);
-  sceneState.summonEmberCloud = new THREE_NS.Points(
-    new THREE_NS.BufferGeometry(),
-    new THREE_NS.PointsMaterial({
-      color: 0xffa84e,
-      size: 0.026,
-      transparent: true,
-      opacity: 0.0,
-      depthWrite: false,
-      blending: THREE_NS.AdditiveBlending,
-      map: sceneState.summonGlowTexture ?? null,
-      alphaTest: 0.02,
-    }),
-  );
-  sceneState.summonEmberCloud.visible = false;
-  sceneState.scene.add(sceneState.summonEmberCloud);
 
   sceneState.summonSpark = new THREE_NS.Sprite(
     new THREE_NS.SpriteMaterial({
@@ -656,7 +869,7 @@ export function initThreeScene(container) {
       blending: THREE_NS.AdditiveBlending,
     }),
   );
-  sceneState.summonSpark.scale.set(0.18, 0.18, 1);
+  sceneState.summonSpark.scale.set(0.24, 0.24, 1);
   sceneState.summonSpark.visible = false;
   sceneState.scene.add(sceneState.summonSpark);
 
@@ -679,7 +892,17 @@ export function initThreeScene(container) {
     const frameScale = dtMs / 16.67;
 
     if (sceneState.starfield) {
-      sceneState.starfield.rotation.z += 0.00035;
+      sceneState.starfield.rotation.z += 0.0009;
+      sceneState.starfield.rotation.y += 0.0003;
+      if (sceneState.starfieldCoreMaterial) {
+        sceneState.starfieldCoreMaterial.opacity = STARFIELD_CORE_OPACITY + Math.sin(t * 0.55) * 0.04;
+      }
+      if (sceneState.starfieldGlowMaterial) {
+        sceneState.starfieldGlowMaterial.opacity = STARFIELD_GLOW_OPACITY + Math.sin(t * 0.95) * 0.04;
+      }
+      if (sceneState.starfieldHaloMaterial) {
+        sceneState.starfieldHaloMaterial.opacity = STARFIELD_HALO_OPACITY + Math.sin(t * 0.7) * 0.022;
+      }
     }
     if (sceneState.ritualCircleGroup?.visible) {
       sceneState.ritualCircleGroup.rotation.z -= 0.0015;
@@ -693,7 +916,6 @@ export function initThreeScene(container) {
       }
     }
     rebuildSummonTrailGeometry(timeMs);
-    rebuildSummonEmberGeometry(timeMs);
     if (sceneState.summonTrailLocked && sceneState.summonTrailLayer) {
       sceneState.summonTrailLayer.material.opacity = 0.88;
     }
@@ -827,9 +1049,13 @@ export function hideRitualCircle() {
 }
 
 export function resetSummonTrail() {
-  sceneState.summonTrailSamples = [];
-  sceneState.summonEmberParticles = [];
+  sceneState.summonParticles = [];
   sceneState.summonTrailLocked = false;
+  sceneState.lastTrailUpdateMs = null;
+  sceneState.emitterState = {
+    index: null,
+    middle: null,
+  };
   if (sceneState.summonTrailLine) {
     sceneState.summonTrailLine.visible = false;
     clearSummonTrailGeometry();
@@ -838,14 +1064,6 @@ export function resetSummonTrail() {
     sceneState.summonTrailLayer.visible = false;
     sceneState.summonTrailLayer.material.opacity = 0;
     sceneState.summonTrailLayer.geometry.setAttribute(
-      "position",
-      new THREE_NS.Float32BufferAttribute([], 3),
-    );
-  }
-  if (sceneState.summonEmberCloud) {
-    sceneState.summonEmberCloud.visible = false;
-    sceneState.summonEmberCloud.material.opacity = 0;
-    sceneState.summonEmberCloud.geometry.setAttribute(
       "position",
       new THREE_NS.Float32BufferAttribute([], 3),
     );
@@ -861,44 +1079,90 @@ export function resetSummonTrail() {
   }
 }
 
-export function appendSummonTrailPoint(point) {
-  if (!sceneState.summonTrailLine || sceneState.summonTrailLocked) return;
-  const worldPoint = toMirroredRitualPoint(point);
-  if (!worldPoint) return;
+export function appendSummonTrailPoint(pointOrEmitters) {
+  if (!sceneState.summonTrailLine || sceneState.summonTrailLocked) return null;
+
+  const emitters =
+    pointOrEmitters && "indexTip" in pointOrEmitters
+      ? {
+          indexTip: pointOrEmitters.indexTip ?? null,
+          middleTip: pointOrEmitters.middleTip ?? null,
+        }
+      : {
+          indexTip: pointOrEmitters ?? null,
+          middleTip: null,
+        };
+  const indexWorld = toMirroredRitualPoint(emitters.indexTip);
+  const middleWorld = toMirroredRitualPoint(emitters.middleTip);
+  if (!indexWorld && !middleWorld) return null;
+
   const now = performance.now();
+  const centerWorld = indexWorld && middleWorld
+    ? indexWorld.clone().add(middleWorld).multiplyScalar(0.5)
+    : indexWorld?.clone() ?? middleWorld?.clone() ?? null;
 
-  const prev = sceneState.summonTrailSamples[sceneState.summonTrailSamples.length - 1]?.position ?? null;
-  if (prev && prev.distanceTo(worldPoint) < 0.01) return;
+  const spanDirection =
+    indexWorld && middleWorld
+      ? middleWorld.clone().sub(indexWorld).normalize()
+      : new THREE_NS.Vector3(0, 1, 0);
+  const tangentDirection = new THREE_NS.Vector3(-spanDirection.y, spanDirection.x, 0).normalize();
 
-  sceneState.summonTrailSamples.push({ position: worldPoint, t: now });
-  if (sceneState.summonTrailSamples.length > TRAIL_MAX_SAMPLES) {
-    sceneState.summonTrailSamples.shift();
+  if (indexWorld) {
+    spawnFromEmitter({
+      source: "index",
+      currentPoint: indexWorld,
+      nowMs: now,
+      fallbackDirection: tangentDirection,
+    });
   }
+  if (middleWorld) {
+    spawnFromEmitter({
+      source: "middle",
+      currentPoint: middleWorld,
+      nowMs: now,
+      fallbackDirection: tangentDirection.clone().multiplyScalar(-1),
+    });
+  }
+
   rebuildSummonTrailGeometry(now);
 
   if (sceneState.summonSpark) {
     sceneState.summonSpark.visible = true;
-    sceneState.summonSpark.position.copy(worldPoint);
+    sceneState.summonSpark.position.copy(centerWorld ?? indexWorld ?? middleWorld);
   }
-  // Firecracker-like embers radiate from fingertip to avoid a flat marker look.
-  for (let i = 0; i < 3; i += 1) {
-    const velocity = new THREE_NS.Vector3(
-      (Math.random() - 0.5) * 0.006,
-      (Math.random() - 0.5) * 0.006,
-      (Math.random() - 0.5) * 0.003,
-    );
-    sceneState.summonEmberParticles.push({
-      position: worldPoint.clone(),
-      velocity,
-      expireAt: now + SUMMON_PARTICLE_LIFE_MS + Math.random() * 240,
+
+  const sourceDebug = [];
+  if (emitters.indexTip && indexWorld) {
+    sourceDebug.push({
+      source: "index",
+      mirroredX: 1 - emitters.indexTip.x,
+      normalizedY: emitters.indexTip.y,
+      worldX: indexWorld.x,
+      worldY: indexWorld.y,
+      worldZ: indexWorld.z,
     });
   }
-  if (sceneState.summonEmberParticles.length > SUMMON_PARTICLE_MAX) {
-    sceneState.summonEmberParticles.splice(
-      0,
-      sceneState.summonEmberParticles.length - SUMMON_PARTICLE_MAX,
-    );
+  if (emitters.middleTip && middleWorld) {
+    sourceDebug.push({
+      source: "middle",
+      mirroredX: 1 - emitters.middleTip.x,
+      normalizedY: emitters.middleTip.y,
+      worldX: middleWorld.x,
+      worldY: middleWorld.y,
+      worldZ: middleWorld.z,
+    });
   }
+
+  return {
+    sources: sourceDebug,
+    centerWorld: centerWorld
+      ? {
+          worldX: centerWorld.x,
+          worldY: centerWorld.y,
+          worldZ: centerWorld.z,
+        }
+      : null,
+  };
 }
 
 export function lockSummonTrail() {

@@ -104,29 +104,68 @@ function scoreProfiles(metrics = null) {
   const speed = safe.speedScore ?? clamp01((safe.speed ?? 0.55) / 0.95);
   const steadiness = safe.steadinessScore ?? safe.steadiness ?? 0.5;
   const closure = safe.closureScore ?? safe.closureCompleteness ?? 0.5;
-  const fragmentedSignal = clamp01((1 - closure) * 0.55 + (1 - circularity) * 0.45);
+  const continuity = safe.continuityScore ?? clamp01(1 - (safe.discontinuityIndex ?? 0.25));
+  const fragmentedSignal = clamp01(
+    (1 - closure) * 0.32 +
+      (1 - circularity) * 0.3 +
+      (1 - continuity) * 0.28 +
+      (1 - steadiness) * 0.1,
+  );
 
   return {
     decisive_circle:
-      circularity * 0.28 + speed * 0.26 + steadiness * 0.2 + closure * 0.2 + size * 0.06,
+      circularity * 0.27 +
+      speed * 0.23 +
+      steadiness * 0.18 +
+      closure * 0.2 +
+      continuity * 0.08 +
+      size * 0.04,
     hesitant_circle:
-      (1 - speed) * 0.28 + (1 - closure) * 0.23 + (1 - steadiness) * 0.24 + (1 - size) * 0.25,
+      (1 - speed) * 0.26 +
+      (1 - closure) * 0.22 +
+      (1 - steadiness) * 0.22 +
+      (1 - size) * 0.2 +
+      (1 - continuity) * 0.1,
     expansive_circle:
-      size * 0.42 + circularity * 0.22 + steadiness * 0.2 + closure * 0.16,
+      size * 0.38 + circularity * 0.24 + steadiness * 0.18 + closure * 0.14 + continuity * 0.06,
     fragmented_circle:
-      fragmentedSignal * 0.6 + (1 - steadiness) * 0.2 + (1 - closure) * 0.2,
+      fragmentedSignal * 0.42 +
+      clamp01((0.45 - closure) / 0.45) * 0.23 +
+      clamp01((0.42 - circularity) / 0.42) * 0.2 +
+      clamp01((0.48 - continuity) / 0.48) * 0.15,
     deliberate_circle:
-      (1 - speed) * 0.34 + steadiness * 0.27 + closure * 0.24 + circularity * 0.15,
+      (1 - speed) * 0.32 +
+      steadiness * 0.24 +
+      closure * 0.22 +
+      circularity * 0.14 +
+      continuity * 0.08,
   };
 }
 
 function classifySummonStyle(metrics = null) {
   const scores = scoreProfiles(metrics);
   const ranked = Object.entries(scores).sort((a, b) => b[1] - a[1]);
-  const [profileId, rawScore] = ranked[0];
+  const safe = metrics ?? {};
+  const closure = safe.closureScore ?? safe.closureCompleteness ?? 0.5;
+  const circularity = safe.circularityScore ?? safe.circularity ?? 0.5;
+  const continuity = safe.continuityScore ?? clamp01(1 - (safe.discontinuityIndex ?? 0.25));
+  let chosenRankIndex = 0;
+  if (
+    ranked[0]?.[0] === "fragmented_circle" &&
+    ranked[1] &&
+    closure >= 0.36 &&
+    circularity >= 0.44 &&
+    continuity >= 0.4
+  ) {
+    // Guardrail: avoid over-triggering fragmented for normal imperfect circles.
+    chosenRankIndex = 1;
+  }
+  const [profileId, rawScore] = ranked[chosenRankIndex];
   const [, secondScore = 0] = ranked[1] ?? [];
   const config = PROFILE_CONFIG[profileId] ?? PROFILE_CONFIG.deliberate_circle;
   const confidence = clamp01(0.52 + (rawScore - secondScore) * 0.9);
+
+  const reason = `circularity:${Number(circularity.toFixed(2))} closure:${Number(closure.toFixed(2))} steadiness:${Number((safe.steadinessScore ?? safe.steadiness ?? 0).toFixed(2))} continuity:${Number(continuity.toFixed(2))}`;
 
   return {
     profileId,
@@ -136,6 +175,12 @@ function classifySummonStyle(metrics = null) {
     scores: Object.fromEntries(
       Object.entries(scores).map(([key, value]) => [key, Number(value.toFixed(3))]),
     ),
+    rankedCandidates: ranked.slice(0, 3).map(([id, score]) => ({
+      profileId: id,
+      profileLabel: PROFILE_CONFIG[id]?.label ?? id,
+      score: Number(score.toFixed(3)),
+    })),
+    reason,
     categoryWeights: { ...config.weights },
   };
 }

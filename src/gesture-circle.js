@@ -30,7 +30,7 @@ function average(values) {
 export class CircleGestureDetector {
   constructor(options = {}) {
     this.maxPoints = options.maxPoints ?? 90;
-    this.maxDurationMs = options.maxDurationMs ?? 1900;
+    this.maxDurationMs = options.maxDurationMs ?? 32000;
     this.minDurationMs = options.minDurationMs ?? 280;
     this.minPoints = options.minPoints ?? 18;
     this.minTravelDistance = options.minTravelDistance ?? 0.42;
@@ -38,6 +38,9 @@ export class CircleGestureDetector {
     this.minCoverage = options.minCoverage ?? 0.68;
     this.minWindingTurns = options.minWindingTurns ?? 0.7;
     this.maxClosureRatio = options.maxClosureRatio ?? 1.05;
+    this.minRevolutions = options.minRevolutions ?? 3;
+    this.interpolationDistance = options.interpolationDistance ?? 0.022;
+    this.maxInterpolationSteps = options.maxInterpolationSteps ?? 5;
 
     this.points = [];
     this.lastMetrics = null;
@@ -55,8 +58,29 @@ export class CircleGestureDetector {
 
     const next = { x, y, t: timestamp };
     const prev = this.points[this.points.length - 1];
-    if (prev && dist(prev, next) < 0.0025) {
+    if (prev && dist(prev, next) < 0.0018) {
       return;
+    }
+    if (!prev) {
+      this.points.push(next);
+      this.#prune(timestamp);
+      return;
+    }
+
+    const distance = dist(prev, next);
+    if (distance > this.interpolationDistance) {
+      const steps = Math.min(
+        this.maxInterpolationSteps,
+        Math.max(1, Math.floor(distance / this.interpolationDistance)),
+      );
+      for (let i = 1; i <= steps; i += 1) {
+        const alpha = i / (steps + 1);
+        this.points.push({
+          x: prev.x + (next.x - prev.x) * alpha,
+          y: prev.y + (next.y - prev.y) * alpha,
+          t: prev.t + (timestamp - prev.t) * alpha,
+        });
+      }
     }
 
     this.points.push(next);
@@ -80,17 +104,23 @@ export class CircleGestureDetector {
       return { success: false, confidence: 0 };
     }
 
-    const first = this.points[0];
-    const last = this.points[this.points.length - 1];
+    const analysisPoints = this.#buildAnalysisPoints(this.points);
+    if (analysisPoints.length < this.minPoints) {
+      this.lastMetrics = null;
+      return { success: false, confidence: 0 };
+    }
+
+    const first = analysisPoints[0];
+    const last = analysisPoints[analysisPoints.length - 1];
     const duration = last.t - first.t;
-    if (duration < this.minDurationMs || duration > this.maxDurationMs) {
+    if (duration < this.minDurationMs) {
       this.lastMetrics = null;
       return { success: false, confidence: 0.05 };
     }
 
-    const center = this.#computeCenter(this.points);
-    const movement = this.#computeTravelDistance(this.points);
-    const radii = this.points.map((p) => dist(p, center));
+    const center = this.#computeCenter(analysisPoints);
+    const movement = this.#computeTravelDistance(analysisPoints);
+    const radii = analysisPoints.map((p) => dist(p, center));
     const meanRadius = radii.reduce((sum, r) => sum + r, 0) / radii.length;
 
     if (meanRadius < 0.035) {
@@ -100,11 +130,14 @@ export class CircleGestureDetector {
 
     const closureDistance = dist(first, last);
     const closureRatio = closureDistance / meanRadius;
-    const coverage = this.#computeAngularCoverage(this.points, center, meanRadius);
-    const windingInfo = this.#computeWindingInfo(this.points, center);
+    const coverage = this.#computeAngularCoverage(analysisPoints, center, meanRadius);
+    const windingInfo = this.#computeWindingInfo(analysisPoints, center);
     const windingTurns = windingInfo.turns;
+    const angularTravel = this.#computeAngularTravel(analysisPoints, center);
+    const revolutions = angularTravel.absRadians / (Math.PI * 2);
     const roundness = this.#computeRoundness(radii, meanRadius);
-    const steadiness = this.#computeSteadiness(this.points);
+    const steadiness = this.#computeSteadiness(analysisPoints);
+    const continuity = this.#computeContinuity(analysisPoints);
     const closureCompleteness = clamp01(1 - closureRatio / this.maxClosureRatio);
     const speed = movement / Math.max(duration / 1000, 0.0001);
     const sizeScore = clamp01((meanRadius - 0.04) / 0.2);
@@ -121,6 +154,10 @@ export class CircleGestureDetector {
     const coverageScore = clamp01((coverage - this.minCoverage) / (1 - this.minCoverage));
     const windingScore = clamp01(windingTurns / 1.05);
     const roundnessScore = roundness;
+    const continuityScore = continuity.score;
+    const discontinuityIndex = continuity.discontinuityIndex;
+    const revolutionProgress = clamp01(revolutions / this.minRevolutions);
+    const evaluationLocked = revolutions < this.minRevolutions;
 
     // Weighted average: movement + coverage + closure are the strongest signals.
     const confidence =
@@ -129,13 +166,16 @@ export class CircleGestureDetector {
       closureScore * 0.24 +
       windingScore * 0.14 +
       roundnessScore * 0.1;
+    const gatedConfidence = confidence * (0.55 + revolutionProgress * 0.45);
 
     const success =
+      !evaluationLocked &&
       movement >= this.minTravelDistance &&
       closureRatio <= this.maxClosureRatio &&
       coverage >= this.minCoverage &&
       windingTurns >= this.minWindingTurns &&
-      confidence >= 0.68;
+      continuityScore >= 0.38 &&
+      gatedConfidence >= 0.68;
 
     this.lastMetrics = {
       pointCount: this.points.length,
@@ -145,25 +185,32 @@ export class CircleGestureDetector {
       circularity: Number(circularityScore.toFixed(3)),
       coverage: Number(coverage.toFixed(3)),
       windingTurns: Number(windingTurns.toFixed(3)),
+      revolutions: Number(revolutions.toFixed(3)),
+      minRevolutionsRequired: this.minRevolutions,
+      totalAngularTravel: Number(angularTravel.absRadians.toFixed(3)),
+      totalAngularTravelDeg: Number(((angularTravel.absRadians * 180) / Math.PI).toFixed(1)),
+      evaluationLocked,
       direction: windingInfo.direction,
       signedWindingTurns: Number(windingInfo.signedTurns.toFixed(3)),
       closureRatio: Number(closureRatio.toFixed(3)),
       closureCompleteness: Number(closureCompleteness.toFixed(3)),
       decisiveness: Number(decisiveness.toFixed(3)),
       steadiness: Number(steadinessScore.toFixed(3)),
+      continuityScore: Number(continuityScore.toFixed(3)),
+      discontinuityIndex: Number(discontinuityIndex.toFixed(3)),
       speed: Number(speed.toFixed(3)),
       sizeScore: Number(sizeScore.toFixed(3)),
       circularityScore: Number(circularityScore.toFixed(3)),
       speedScore: Number(speedScore.toFixed(3)),
       steadinessScore: Number(steadinessScore.toFixed(3)),
       closureScore: Number(closureScoreMetric.toFixed(3)),
-      confidence: Number(confidence.toFixed(3)),
+      confidence: Number(gatedConfidence.toFixed(3)),
       success,
     };
 
     return {
       success,
-      confidence: Number(confidence.toFixed(3)),
+      confidence: Number(gatedConfidence.toFixed(3)),
       metrics: this.lastMetrics,
     };
   }
@@ -245,6 +292,21 @@ export class CircleGestureDetector {
     return { turns, signedTurns, direction };
   }
 
+  #computeAngularTravel(points, center) {
+    let signedRadians = 0;
+    let absRadians = 0;
+    for (let i = 1; i < points.length; i += 1) {
+      const prevAngle = Math.atan2(points[i - 1].y - center.y, points[i - 1].x - center.x);
+      const nextAngle = Math.atan2(points[i].y - center.y, points[i].x - center.x);
+      let delta = nextAngle - prevAngle;
+      if (delta > Math.PI) delta -= Math.PI * 2;
+      if (delta < -Math.PI) delta += Math.PI * 2;
+      signedRadians += delta;
+      absRadians += Math.abs(delta);
+    }
+    return { signedRadians, absRadians };
+  }
+
   #computeRoundness(radii, meanRadius) {
     const variance =
       radii.reduce((sum, r) => sum + (r - meanRadius) ** 2, 0) / Math.max(radii.length, 1);
@@ -265,6 +327,43 @@ export class CircleGestureDetector {
     const stdDev = Math.sqrt(variance);
     const normalizedJitter = stdDev / mean;
     return clamp01(1 - normalizedJitter / 1.2);
+  }
+
+  #buildAnalysisPoints(points) {
+    if (!Array.isArray(points) || points.length < 3) return points ?? [];
+    const smoothed = [];
+    for (let i = 0; i < points.length; i += 1) {
+      const prev = points[Math.max(0, i - 1)];
+      const curr = points[i];
+      const next = points[Math.min(points.length - 1, i + 1)];
+      smoothed.push({
+        x: prev.x * 0.22 + curr.x * 0.56 + next.x * 0.22,
+        y: prev.y * 0.22 + curr.y * 0.56 + next.y * 0.22,
+        t: curr.t,
+      });
+    }
+    return smoothed;
+  }
+
+  #computeContinuity(points) {
+    if (!Array.isArray(points) || points.length < 4) {
+      return { score: 0, discontinuityIndex: 1 };
+    }
+    const segments = [];
+    for (let i = 1; i < points.length; i += 1) {
+      segments.push(dist(points[i - 1], points[i]));
+    }
+    const mean = average(segments);
+    if (mean <= 0.0001) return { score: 0, discontinuityIndex: 1 };
+    const jumpThreshold = mean * 2.65;
+    const jumpCount = segments.filter((segment) => segment > jumpThreshold).length;
+    const jumpRatio = jumpCount / Math.max(segments.length, 1);
+    const maxRatio = Math.max(...segments) / mean;
+    const discontinuityIndex = clamp01(jumpRatio * 0.72 + clamp01((maxRatio - 2) / 4) * 0.28);
+    return {
+      score: clamp01(1 - discontinuityIndex),
+      discontinuityIndex,
+    };
   }
 }
 

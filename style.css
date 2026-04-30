@@ -34,6 +34,50 @@ body {
   overflow: hidden;
 }
 
+.page-atmosphere {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  transition: opacity 320ms ease;
+}
+
+.page-atmosphere--scatter {
+  background:
+    radial-gradient(circle at 18% 24%, rgba(206, 220, 255, 0.62) 0 1px, transparent 1.4px),
+    radial-gradient(circle at 74% 28%, rgba(206, 220, 255, 0.5) 0 1px, transparent 1.45px),
+    radial-gradient(circle at 42% 64%, rgba(206, 220, 255, 0.44) 0 0.9px, transparent 1.3px),
+    radial-gradient(circle at 82% 72%, rgba(206, 220, 255, 0.4) 0 0.8px, transparent 1.2px),
+    radial-gradient(circle at 28% 82%, rgba(206, 220, 255, 0.35) 0 0.75px, transparent 1.15px);
+  background-size:
+    260px 220px,
+    320px 280px,
+    230px 210px,
+    280px 250px,
+    210px 190px;
+  opacity: 0.4;
+  animation: landingStarDrift 26s linear infinite;
+}
+
+.page-atmosphere--ritual {
+  background:
+    radial-gradient(380px 280px at 50% 52%, rgba(168, 188, 240, 0.19), transparent 72%),
+    radial-gradient(circle at 46% 43%, rgba(201, 216, 255, 0.38) 0 1px, transparent 1.5px),
+    radial-gradient(circle at 54% 47%, rgba(201, 216, 255, 0.32) 0 0.95px, transparent 1.45px),
+    radial-gradient(circle at 50% 58%, rgba(201, 216, 255, 0.28) 0 0.85px, transparent 1.35px),
+    radial-gradient(circle at 42% 52%, rgba(201, 216, 255, 0.24) 0 0.75px, transparent 1.2px),
+    radial-gradient(circle at 58% 54%, rgba(201, 216, 255, 0.24) 0 0.75px, transparent 1.2px);
+  background-size:
+    100% 100%,
+    170px 170px,
+    190px 190px,
+    210px 210px,
+    160px 160px,
+    160px 160px;
+  opacity: 0.18;
+  animation: ritualAuraDrift 30s ease-in-out infinite;
+}
+
 #scene-root {
   position: absolute;
   inset: 0;
@@ -87,6 +131,19 @@ body {
   mask-composite: exclude;
   -webkit-mask-composite: xor;
   opacity: 0.65;
+}
+
+.oracle-app.ritual-active .page-atmosphere--scatter,
+.oracle-app.ritual-active .page-atmosphere--ritual {
+  opacity: 0;
+}
+
+.oracle-app.results-active .page-atmosphere--scatter {
+  opacity: 0.33;
+}
+
+.oracle-app.results-active .page-atmosphere--ritual {
+  opacity: 0.16;
 }
 
 .ritual-panel {
@@ -158,6 +215,16 @@ body {
   gap: 0.75rem;
 }
 
+.ritual-profile-panel {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  z-index: 5;
+  width: min(320px, 36vw);
+  display: grid;
+  gap: 0.75rem;
+}
+
 .ritual-info-block {
   padding: 0.72rem 0.8rem;
   border-radius: 12px;
@@ -183,14 +250,29 @@ body {
 .ritual-hud {
   position: absolute;
   left: calc(1rem + min(320px, 36vw) + 1rem);
+  right: calc(1rem + min(320px, 36vw) + 1rem);
   bottom: 1.5rem;
   z-index: 3;
-  width: min(56vw, 660px);
+  width: auto;
   padding: 0.65rem 0.9rem;
   border-radius: 12px;
   border: 1px solid rgba(167, 185, 222, 0.24);
   background: rgba(7, 15, 37, 0.62);
   backdrop-filter: blur(4px);
+}
+
+.profile-row {
+  border: 1px solid rgba(167, 185, 222, 0.18);
+  border-radius: 8px;
+  padding: 0.2rem 0.4rem;
+  opacity: 0.72;
+}
+
+.profile-row.is-active {
+  border-color: rgba(207, 185, 119, 0.62);
+  background: rgba(183, 161, 113, 0.16);
+  color: #f4ecd8;
+  opacity: 1;
 }
 
 .ritual-panel::before {
@@ -343,6 +425,30 @@ textarea:focus {
   pointer-events: none;
 }
 
+@keyframes landingStarDrift {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(-8px, 4px, 0);
+  }
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes ritualAuraDrift {
+  0% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(0, -6px, 0) scale(1.015);
+  }
+  100% {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
 .result-panel.is-visible {
   opacity: 1;
   transform: translateY(0);
@@ -420,6 +526,14 @@ textarea:focus {
 
   .ritual-hud {
     left: 1rem;
+    right: 1rem;
     width: calc(100% - 2rem);
+  }
+
+  .ritual-profile-panel {
+    width: calc(100% - 2rem);
+    max-width: none;
+    top: auto;
+    bottom: 7.8rem;
   }
 }

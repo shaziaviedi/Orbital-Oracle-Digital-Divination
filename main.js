@@ -25,10 +25,13 @@ import { createOracleEngine, loadOracleData } from "./src/oracle-engine.js";
  * Wires hand tracking + gesture detection into a clear ritual state flow.
  */
 
-const CIRCLE_CONFIDENCE_THRESHOLD = 0.62;
+const CIRCLE_CONFIDENCE_THRESHOLD = 0.56;
 const SUMMONING_DELAY_MS = 1100;
 const STAR_HOLD_TO_SELECT_MS = 1200;
 const REVEAL_DELAY_MS = 520;
+const DRAW_CAPTURE_DURATION = 36000; // Safety cap; completion is gated by revolutions.
+const MIN_REVOLUTIONS_REQUIRED = 3;
+const SUMMON_DEBUG_LOG_INTERVAL_MS = 260;
 const PINCH_THRESHOLD = 0.055;
 const OPEN_FINGER_THRESHOLD = 1.08;
 const FIST_CURLED_FINGER_THRESHOLD = 3;
@@ -38,7 +41,7 @@ const rotationSensitivityX = 5.2; // Horizontal fingertip motion -> yaw
 const rotationSensitivityY = 4.2; // Vertical fingertip motion -> pitch
 const smoothingFactor = 0.32;
 const SUMMON_INSTRUCTION =
-  "With one hand, draw a circle in the air using your index finger. Your gesture shapes the oracle.";
+  "With one hand, draw a circle in the air using your index and middle fingers. Your gesture shapes the oracle.";
 
 const HAND_CONNECTIONS = [
   [0, 1],
@@ -63,6 +66,13 @@ const HAND_CONNECTIONS = [
   [19, 20],
   [0, 17],
 ];
+const PROFILE_LABEL_TO_KEY = {
+  "Decisive Circle": "decisive",
+  "Hesitant Circle": "hesitant",
+  "Expansive Circle": "expansive",
+  "Fragmented Circle": "fragmented",
+  "Deliberate Circle": "deliberate",
+};
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -540,6 +550,22 @@ async function bootstrap() {
   const activeModeText = document.getElementById("active-mode");
   const rolePrimaryText = document.getElementById("role-primary");
   const roleSecondaryText = document.getElementById("role-secondary");
+  const profileCurrent = document.getElementById("profile-current");
+  const profileConfidence = document.getElementById("profile-confidence");
+  const metricCircularity = document.getElementById("metric-circularity");
+  const metricClosure = document.getElementById("metric-closure");
+  const metricSteadiness = document.getElementById("metric-steadiness");
+  const metricContinuity = document.getElementById("metric-continuity");
+  const metricRevolutions = document.getElementById("metric-revolutions");
+  const profileTop2 = document.getElementById("profile-top2");
+  const profileReason = document.getElementById("profile-reason");
+  const profileRows = {
+    decisive: document.getElementById("profile-decisive"),
+    hesitant: document.getElementById("profile-hesitant"),
+    expansive: document.getElementById("profile-expansive"),
+    fragmented: document.getElementById("profile-fragmented"),
+    deliberate: document.getElementById("profile-deliberate"),
+  };
   const resultPanel = document.getElementById("result-panel");
   const resultQuestion = document.getElementById("result-question");
   const resultStar = document.getElementById("result-star");
@@ -563,6 +589,16 @@ async function bootstrap() {
     !activeModeText ||
     !rolePrimaryText ||
     !roleSecondaryText ||
+    !profileCurrent ||
+    !profileConfidence ||
+    !metricCircularity ||
+    !metricClosure ||
+    !metricSteadiness ||
+    !metricContinuity ||
+    !metricRevolutions ||
+    !profileTop2 ||
+    !profileReason ||
+    Object.values(profileRows).some((node) => !node) ||
     !resultPanel ||
     !resultQuestion ||
     !resultStar ||
@@ -593,11 +629,13 @@ async function bootstrap() {
   let constellationReady = false;
 
   const circleDetector = new CircleGestureDetector({
-    maxPoints: 320,
-    maxDurationMs: 5600,
-    minDurationMs: 420,
-    minCoverage: 0.58,
-    minTravelDistance: 0.34,
+    maxPoints: 1800,
+    maxDurationMs: DRAW_CAPTURE_DURATION,
+    minDurationMs: 980,
+    minCoverage: 0.54,
+    minTravelDistance: 0.28,
+    minWindingTurns: 0.58,
+    minRevolutions: MIN_REVOLUTIONS_REQUIRED,
   });
   const zoomController = createZoomController();
   const rotationController = createRotationController();
@@ -611,11 +649,50 @@ async function bootstrap() {
   let lastControlMode = "None";
   let summonMetrics = null;
   let summonStyle = null;
+  let lastSummonDebugLogMs = 0;
+  let lastGesturePoint = null;
 
   function setStatus(message) {
     if (message === lastStatusText) return;
     lastStatusText = message;
     statusText.textContent = message;
+  }
+
+  function formatMetric(value, digits = 2) {
+    if (!Number.isFinite(value)) return "--";
+    return Number(value).toFixed(digits);
+  }
+
+  function clearProfileSelection() {
+    for (const row of Object.values(profileRows)) {
+      row.classList.remove("is-active");
+    }
+  }
+
+  function updateProfileDebugPanel(metrics = null, style = null) {
+    const currentLabel = style?.profileLabel ?? "--";
+    profileCurrent.textContent = currentLabel;
+    profileConfidence.textContent = Number.isFinite(style?.confidence)
+      ? `${Math.round(style.confidence * 100)}%`
+      : "--";
+    metricCircularity.textContent = formatMetric(metrics?.circularityScore ?? metrics?.circularity);
+    metricClosure.textContent = formatMetric(metrics?.closureScore ?? metrics?.closureCompleteness);
+    metricSteadiness.textContent = formatMetric(metrics?.steadinessScore ?? metrics?.steadiness);
+    metricContinuity.textContent = formatMetric(metrics?.continuityScore);
+    metricRevolutions.textContent = formatMetric(metrics?.revolutions);
+
+    const top = Array.isArray(style?.rankedCandidates) ? style.rankedCandidates.slice(0, 2) : [];
+    profileTop2.textContent =
+      top.length > 0
+        ? top.map((candidate) => `${candidate.profileLabel} (${candidate.score.toFixed(2)})`).join(" | ")
+        : "--";
+    profileReason.textContent = style?.reason ?? "--";
+
+    clearProfileSelection();
+    const key = PROFILE_LABEL_TO_KEY[currentLabel] ?? null;
+    if (key && profileRows[key]) {
+      profileRows[key].classList.add("is-active");
+    }
   }
 
   function transitionTo(phase, context = {}) {
@@ -628,6 +705,7 @@ async function bootstrap() {
   }
 
   function showLandingScreen() {
+    oracleApp.classList.remove("results-active");
     oracleApp.classList.remove("ritual-active");
     landingScreen.classList.remove("is-hidden");
     ritualScreen.classList.add("is-hidden");
@@ -639,10 +717,12 @@ async function bootstrap() {
     activeModeText.textContent = "None";
     rolePrimaryText.textContent = "None";
     roleSecondaryText.textContent = "None";
+    updateProfileDebugPanel(null, null);
     drawHandOverlay({ canvas: handOverlay, hands: [], roles: {} });
   }
 
   function showRitualScreen() {
+    oracleApp.classList.remove("results-active");
     oracleApp.classList.add("ritual-active");
     console.debug("[OrbitalOracle] Switching UI to ritual screen.");
     landingScreen.classList.add("is-hidden");
@@ -670,6 +750,7 @@ async function bootstrap() {
   }
 
   function showResultPanel() {
+    oracleApp.classList.add("results-active");
     resultPanel.hidden = false;
     window.requestAnimationFrame(() => {
       resultPanel.classList.add("is-visible");
@@ -677,6 +758,7 @@ async function bootstrap() {
   }
 
   function hideResultPanel() {
+    oracleApp.classList.remove("results-active");
     resultPanel.classList.remove("is-visible");
     window.setTimeout(() => {
       if (!resultPanel.classList.contains("is-visible")) {
@@ -732,6 +814,8 @@ async function bootstrap() {
     lastControlMode = "None";
     summonMetrics = null;
     summonStyle = null;
+    lastSummonDebugLogMs = 0;
+    lastGesturePoint = null;
     if (sceneReady) {
       constellationReady = false;
       setConstellationMotionPaused(false);
@@ -748,6 +832,7 @@ async function bootstrap() {
     rolePrimaryText.textContent = "None";
     roleSecondaryText.textContent = "None";
     setStatus("");
+    updateProfileDebugPanel(null, null);
     drawHandOverlay({ canvas: handOverlay, hands: [], roles: {} });
   }
 
@@ -856,30 +941,72 @@ async function bootstrap() {
 
       if (phase === PHASES.AWAITING_GESTURE) {
         if (hands.length > 1) {
-          setStatus("Use one hand only. Draw a single circle with your index finger.");
+          setStatus("Use one hand only. Draw a single circle with your index and middle fingers.");
           return;
         }
         const activeHand = hands.length === 1 ? hands[0] : null;
-        const fingertip = activeHand?.landmarks?.[8] ?? null;
-        if (!fingertip) {
+        const indexTip = activeHand?.landmarks?.[8] ?? null;
+        const middleTip = activeHand?.landmarks?.[12] ?? null;
+        if (!indexTip) {
           setStatus(SUMMON_INSTRUCTION);
+          updateProfileDebugPanel(null, null);
           return;
         }
+        const sampleTimestamp = Number.isFinite(timestamp) ? timestamp : performance.now();
+        const indexClient = normalizedToClientPoint(indexTip, sceneContainer);
+        const middleClient = normalizedToClientPoint(middleTip, sceneContainer);
+        let trailSpawn = null;
         if (sceneReady) {
-          appendSummonTrailPoint(fingertip);
+          trailSpawn = appendSummonTrailPoint({ indexTip, middleTip });
         }
 
-        circleDetector.addPoint(fingertip.x, fingertip.y, timestamp);
+        const detectorPointRaw =
+          middleTip != null
+            ? { x: (indexTip.x + middleTip.x) * 0.5, y: (indexTip.y + middleTip.y) * 0.5 }
+            : indexTip;
+        const detectorPoint = lastGesturePoint
+          ? {
+              x: lastGesturePoint.x * 0.64 + detectorPointRaw.x * 0.36,
+              y: lastGesturePoint.y * 0.64 + detectorPointRaw.y * 0.36,
+            }
+          : detectorPointRaw;
+        lastGesturePoint = detectorPoint;
+        circleDetector.addPoint(detectorPoint.x, detectorPoint.y, sampleTimestamp);
         const result = circleDetector.detect();
+        const revolutions = result.metrics?.revolutions ?? 0;
+        const angularTravel = result.metrics?.totalAngularTravel ?? 0;
+        const evaluationLocked = result.metrics?.evaluationLocked ?? true;
 
         appState.setGestureProgress({
           confidence: result.confidence,
           detected: result.success,
         });
         const styleHint = oracleEngine.classifySummon(result.metrics ?? null);
+        updateProfileDebugPanel(result.metrics ?? null, styleHint);
         setStatus(
-          `${SUMMON_INSTRUCTION} Summon clarity: ${Math.round(result.confidence * 100)}% (${styleHint.profileLabel}).`,
+          `${SUMMON_INSTRUCTION} Revolutions: ${revolutions.toFixed(2)}/${MIN_REVOLUTIONS_REQUIRED}. Summon clarity: ${Math.round(result.confidence * 100)}% (${styleHint.profileLabel}).`,
         );
+
+        if (sampleTimestamp - lastSummonDebugLogMs >= SUMMON_DEBUG_LOG_INTERVAL_MS) {
+          lastSummonDebugLogMs = sampleTimestamp;
+          console.debug("[Summon Debug]", {
+            revolutions: Number(revolutions.toFixed(3)),
+            totalAngularTravel: Number(angularTravel.toFixed(3)),
+            evaluationLockedUntilThreeRevolutions: evaluationLocked,
+            indexClientX: indexClient ? Number(indexClient.clientX.toFixed(1)) : null,
+            indexClientY: indexClient ? Number(indexClient.clientY.toFixed(1)) : null,
+            middleClientX: middleClient ? Number(middleClient.clientX.toFixed(1)) : null,
+            middleClientY: middleClient ? Number(middleClient.clientY.toFixed(1)) : null,
+            trailSpawnSources: trailSpawn?.sources?.map((source) => ({
+              source: source.source,
+              worldX: Number(source.worldX.toFixed(3)),
+              worldY: Number(source.worldY.toFixed(3)),
+              worldZ: Number(source.worldZ.toFixed(3)),
+              mirroredX: Number(source.mirroredX.toFixed(3)),
+              normalizedY: Number(source.normalizedY.toFixed(3)),
+            })),
+          });
+        }
 
         if (result.success && result.confidence >= CIRCLE_CONFIDENCE_THRESHOLD) {
           handleCircleRecognized(result.confidence, result.metrics ?? null);

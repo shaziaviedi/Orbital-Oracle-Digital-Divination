@@ -8,6 +8,9 @@
   </head>
   <body>
     <main class="oracle-app">
+      <div class="page-atmosphere page-atmosphere--ritual" aria-hidden="true"></div>
+      <div class="page-atmosphere page-atmosphere--scatter" aria-hidden="true"></div>
+
       <section id="landing-screen" class="ritual-panel" aria-label="Orbital Oracle landing screen">
         <header class="ritual-header">
           <h1>Orbital Oracle</h1>
@@ -50,6 +53,28 @@
             <p>Current mode: <span id="active-mode">None</span></p>
             <p>Role A: <span id="role-primary">None</span></p>
             <p>Role B: <span id="role-secondary">None</span></p>
+          </section>
+        </aside>
+        <aside class="ritual-profile-panel" aria-label="Circle profile debug panel">
+          <section class="ritual-info-block">
+            <h3>Circle Profiles</h3>
+            <p id="profile-decisive" class="profile-row">Decisive Circle</p>
+            <p id="profile-hesitant" class="profile-row">Hesitant Circle</p>
+            <p id="profile-expansive" class="profile-row">Expansive Circle</p>
+            <p id="profile-fragmented" class="profile-row">Fragmented Circle</p>
+            <p id="profile-deliberate" class="profile-row">Deliberate Circle</p>
+          </section>
+          <section class="ritual-info-block">
+            <h3>Circle Metrics</h3>
+            <p>Current: <span id="profile-current">--</span></p>
+            <p>Confidence: <span id="profile-confidence">--</span></p>
+            <p>Circularity: <span id="metric-circularity">--</span></p>
+            <p>Closure: <span id="metric-closure">--</span></p>
+            <p>Steadiness: <span id="metric-steadiness">--</span></p>
+            <p>Continuity: <span id="metric-continuity">--</span></p>
+            <p>Revolutions: <span id="metric-revolutions">--</span></p>
+            <p>Top candidates: <span id="profile-top2">--</span></p>
+            <p>Reason: <span id="profile-reason">--</span></p>
           </section>
         </aside>
         <div class="ritual-hud">
