@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Orbital Oracle</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="oracle-app">
+      <section id="landing-screen" class="ritual-panel" aria-label="Orbital Oracle landing screen">
+        <header class="ritual-header">
+          <h1>Orbital Oracle</h1>
+          <p>
+            Speak your question, trace the circle of intention, and reveal the star
+            that answers.
+          </p>
+        </header>
+
+        <div class="question-field">
+          <label for="question-input">Your Question</label>
+          <textarea
+            id="question-input"
+            rows="3"
+            placeholder="What guidance should I seek tonight?"
+          ></textarea>
+          <p id="question-error" class="question-error" role="alert"></p>
+        </div>
+
+        <button id="begin-button" type="button">Begin Ritual</button>
+      </section>
+
+      <section id="ritual-screen" class="ritual-screen is-hidden" aria-label="Orbital Oracle ritual screen">
+        <section id="scene-root" aria-hidden="true"></section>
+        <video id="hand-video" class="ritual-video" autoplay playsinline muted></video>
+        <canvas id="hand-overlay" class="ritual-hand-overlay" aria-hidden="true"></canvas>
+        <aside class="ritual-side-panel" aria-label="Interaction guide and hand detection">
+          <section class="ritual-info-block">
+            <h3>Instructions</h3>
+            <p>Pinch with both hands -> Zoom constellation</p>
+            <p>Open one hand + move other index finger -> Rotate constellation</p>
+            <p>Make a fist with one hand -> Pause constellation</p>
+            <p>While paused, use other index finger -> Select star</p>
+          </section>
+          <section class="ritual-info-block">
+            <h3>Hand Position Detection</h3>
+            <p id="hand-detection-status" class="hand-detection-status">No hand detected</p>
+            <p>Hand 1: <span id="hand1-state">Unknown</span></p>
+            <p>Hand 2: <span id="hand2-state">Unknown</span></p>
+            <p>Current mode: <span id="active-mode">None</span></p>
+            <p>Role A: <span id="role-primary">None</span></p>
+            <p>Role B: <span id="role-secondary">None</span></p>
+          </section>
+        </aside>
+        <div class="ritual-hud">
+          <p id="status-text" class="status-text"></p>
+        </div>
+      </section>
+
+      <aside id="result-panel" class="result-panel" hidden aria-live="polite">
+        <h2>Revelation</h2>
+        <p class="result-question-label">Your question</p>
+        <p id="result-question" class="result-question"></p>
+        <p id="result-star" class="result-star"></p>
+        <p id="oracle-answer">No answer yet.</p>
+        <button id="again-button" type="button">Begin Another Ritual</button>
+      </aside>
+    </main>
+
+    <script src="https://cdn.jsdelivr.net/npm/three@0.165.0/build/three.min.js"></script>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
