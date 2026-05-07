@@ -51,6 +51,19 @@ const SUMMON_MAX_LINKS = 900;
 const FAST_MOVE_DISTANCE = 0.055;
 const INTERPOLATION_STEPS_ON_FAST_MOVE = 7;
 const TRAIL_MAX_SAMPLES = 1200;
+/** Constellation point halos: soft additive sprites over the ritual webcam plate. */
+const CONSTELLATION_STAR_GLOW_SCALE = 4.82;
+const CONSTELLATION_STAR_GLOW_OPACITY_BASE = 0.52;
+
+const CONSTELLATION_LINE_CORE_OPACITY = 0.72;
+/** Solid-line baseline; tube radius scales from this for soft-edge look. */
+const CONSTELLATION_LINE_CORE_RADIUS = 0.0115;
+/** Slightly wider tube so radial alpha falloff reads as soft blur, not a second stroke. */
+const CONSTELLATION_LINE_TUBE_RADIUS = CONSTELLATION_LINE_CORE_RADIUS * 1.62;
+const CONSTELLATION_SEGMENT_RADIAL_SEGMENTS = 16;
+
+/** Grayscale alpha strip (cached): soft center like merged landing title shadows. */
+let constellationLineAlphaMapTexture = null;
 
 const sceneState = {
   container: null,
@@ -389,6 +402,15 @@ function createSoftGlowTexture() {
   return texture;
 }
 
+let constellationStarGlowMap = null;
+
+function getConstellationStarGlowMap() {
+  if (!constellationStarGlowMap) {
+    constellationStarGlowMap = createStarGlowTexture();
+  }
+  return constellationStarGlowMap;
+}
+
 function createStarGlowTexture() {
   const size = 128;
   const canvas = document.createElement("canvas");
@@ -709,6 +731,36 @@ function getConstellationPosition(index, count) {
   return new THREE_NS.Vector3(Math.cos(angle) * radius, Math.sin(angle) * radius, z);
 }
 
+function getConstellationLineAlphaMapTexture() {
+  if (!THREE_NS || constellationLineAlphaMapTexture) {
+    return constellationLineAlphaMapTexture;
+  }
+  const w = 256;
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = 2;
+  const ctx = canvas.getContext("2d");
+  const g = ctx.createLinearGradient(0, 0, w, 0);
+  g.addColorStop(0, "#000000");
+  g.addColorStop(0.14, "#050810");
+  g.addColorStop(0.32, "#4a5578");
+  g.addColorStop(0.5, "#ffffff");
+  g.addColorStop(0.68, "#4a5578");
+  g.addColorStop(0.86, "#050810");
+  g.addColorStop(1, "#000000");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, w, 2);
+  constellationLineAlphaMapTexture = new THREE_NS.CanvasTexture(canvas);
+  const NoColor = THREE_NS.NoColorSpace;
+  if (NoColor != null) {
+    constellationLineAlphaMapTexture.colorSpace = NoColor;
+  }
+  constellationLineAlphaMapTexture.wrapS = THREE_NS.ClampToEdgeWrapping;
+  constellationLineAlphaMapTexture.wrapT = THREE_NS.ClampToEdgeWrapping;
+  constellationLineAlphaMapTexture.needsUpdate = true;
+  return constellationLineAlphaMapTexture;
+}
+
 function createConstellationLinks(positions) {
   const lineVertices = [];
   const maxDistance = 1.55;
@@ -741,16 +793,42 @@ function createConstellationLinks(positions) {
     }
   }
 
-  const lineGeometry = new THREE_NS.BufferGeometry();
-  lineGeometry.setAttribute("position", new THREE_NS.Float32BufferAttribute(lineVertices, 3));
-  const lineMaterial = new THREE_NS.LineBasicMaterial({
-    color: 0xa9baf9,
+  const lineMaterial = new THREE_NS.MeshBasicMaterial({
+    color: 0xc7d7ff,
+    alphaMap: getConstellationLineAlphaMapTexture(),
     transparent: true,
-    opacity: 0.42,
+    opacity: CONSTELLATION_LINE_CORE_OPACITY,
+    depthWrite: false,
+    side: THREE_NS.DoubleSide,
+    toneMapped: false,
   });
   sceneState.constellationLineMaterial = lineMaterial;
 
-  return new THREE_NS.LineSegments(lineGeometry, lineMaterial);
+  const up = new THREE_NS.Vector3(0, 1, 0);
+  const group = new THREE_NS.Group();
+  for (let i = 0; i < lineVertices.length; i += 6) {
+    const start = new THREE_NS.Vector3(lineVertices[i], lineVertices[i + 1], lineVertices[i + 2]);
+    const end = new THREE_NS.Vector3(lineVertices[i + 3], lineVertices[i + 4], lineVertices[i + 5]);
+    const direction = end.clone().sub(start);
+    const length = direction.length();
+    if (length < 0.0001) continue;
+    const midpoint = start.clone().add(end).multiplyScalar(0.5);
+    const normalizedDirection = direction.clone().normalize();
+    const rotation = new THREE_NS.Quaternion().setFromUnitVectors(up, normalizedDirection);
+    const tubeGeometry = new THREE_NS.CylinderGeometry(
+      CONSTELLATION_LINE_TUBE_RADIUS,
+      CONSTELLATION_LINE_TUBE_RADIUS,
+      length,
+      CONSTELLATION_SEGMENT_RADIAL_SEGMENTS,
+      1,
+      true,
+    );
+    const linkMesh = new THREE_NS.Mesh(tubeGeometry, lineMaterial);
+    linkMesh.position.copy(midpoint);
+    linkMesh.quaternion.copy(rotation);
+    group.add(linkMesh);
+  }
+  return group;
 }
 
 export function createConstellationFromData(data) {
@@ -777,32 +855,62 @@ export function createConstellationFromData(data) {
     positions.push(position);
 
     const size = 0.055 + ((i % 4) * 0.012 + Math.random() * 0.005);
+
+    const glowMaterial = new THREE_NS.SpriteMaterial({
+      map: getConstellationStarGlowMap(),
+      color: 0xd0e4ff,
+      transparent: true,
+      opacity: CONSTELLATION_STAR_GLOW_OPACITY_BASE,
+      depthWrite: false,
+      depthTest: true,
+      blending: THREE_NS.AdditiveBlending,
+    });
+    const glowSprite = new THREE_NS.Sprite(glowMaterial);
+    glowSprite.center.set(0.5, 0.5);
+    const glowWorldSize = size * CONSTELLATION_STAR_GLOW_SCALE;
+    glowSprite.scale.set(glowWorldSize, glowWorldSize, 1);
+
     const star = new THREE_NS.Mesh(
-      new THREE_NS.SphereGeometry(size, 14, 14),
+      new THREE_NS.SphereGeometry(size, 16, 16),
       new THREE_NS.MeshStandardMaterial({
-        color: 0xdde7ff,
-        emissive: 0x2d3f7a,
-        emissiveIntensity: 0.72,
+        color: 0xfbfcff,
+        emissive: 0x9ec8f8,
+        emissiveIntensity: 1.08,
+        metalness: 0.05,
+        roughness: 0.34,
         transparent: true,
         opacity: 1,
       }),
     );
-
-    star.position.copy(position);
     star.userData.starId = starEntry.id;
     star.userData.label = starEntry.label ?? starEntry.id;
+    star.userData.constellationGlowSprite = glowSprite;
+
+    const starRoot = new THREE_NS.Group();
+    starRoot.position.copy(position);
+    starRoot.add(glowSprite);
+    starRoot.add(star);
 
     sceneState.starMeshes.push(star);
     sceneState.starById.set(starEntry.id, star);
     sceneState.starPulseMeta.push({
       mesh: star,
-      baseScale: star.scale.x,
+      root: starRoot,
+      glowSprite,
+      glowSize: glowWorldSize,
+      baseScale: 1,
       phase: Math.random() * Math.PI * 2,
       speed: 0.55 + Math.random() * 0.5,
+      flickerSpeed: 0.72 + Math.random() * 0.62,
+      flickerPhase: Math.random() * Math.PI * 2,
+      sparkleSpeed: 1.05 + Math.random() * 1.45,
+      sparklePhase: Math.random() * Math.PI * 2,
       drift: (Math.random() - 0.5) * 0.07,
+      baseX: position.x,
       baseY: position.y,
+      baseZ: position.z,
     });
-    group.add(star);
+    group.add(starRoot);
   }
 
   group.add(createConstellationLinks(positions));
@@ -1127,30 +1235,61 @@ export function initThreeScene(container) {
         (sceneState.constellationDimTarget - sceneState.constellationDimCurrent) * 0.07;
       const dimFactor = clamp01(sceneState.constellationDimCurrent);
       const starOpacity = 1 - dimFactor * 0.42;
-      const lineOpacity = 0.42 - dimFactor * 0.2;
+      const lineCoreOpacity = CONSTELLATION_LINE_CORE_OPACITY - dimFactor * 0.34;
 
       for (const pulse of sceneState.starPulseMeta) {
         const { isSelected, isTargeted, targetProgress } = getStarVisualState(
           pulse.mesh.userData.starId,
         );
-        const pulseFactor = 1 + Math.sin(t * pulse.speed + pulse.phase) * 0.055;
+        const breath = Math.sin(t * pulse.speed + pulse.phase) * 0.065;
+        const flicker =
+          Math.sin(t * pulse.flickerSpeed + pulse.flickerPhase) * 0.082 +
+          Math.sin(t * pulse.flickerSpeed * 1.67 + pulse.flickerPhase * 0.37) * 0.052;
+        const glintRaw = Math.max(0, Math.sin(t * pulse.sparkleSpeed + pulse.sparklePhase));
+        const glint = glintRaw ** 8.2 * 0.315;
+        const glintFine = glintRaw ** 18 * 0.055;
+
+        const pulseFactor = 1 + breath;
         const targetScaleBoost = isSelected ? 0.22 : isTargeted ? 0.1 + targetProgress * 0.2 : 0;
-        const finalScale = pulseFactor + targetScaleBoost;
-        pulse.mesh.scale.set(finalScale, finalScale, finalScale);
-        pulse.mesh.position.y = pulse.baseY + Math.sin(t * (pulse.speed * 0.65) + pulse.phase) * pulse.drift;
+        const finalScale = pulse.baseScale * (pulseFactor + targetScaleBoost);
+        pulse.root.scale.set(finalScale, finalScale, finalScale);
+        pulse.root.position.set(
+          pulse.baseX,
+          pulse.baseY + Math.sin(t * (pulse.speed * 0.65) + pulse.phase) * pulse.drift,
+          pulse.baseZ,
+        );
         pulse.mesh.material.opacity = starOpacity;
 
         if (isSelected) {
-          pulse.mesh.material.emissiveIntensity = 1.35;
+          pulse.mesh.material.emissiveIntensity = 1.42 + breath * 0.36 + glint * 0.48 + glintFine * 0.6;
         } else if (isTargeted) {
-          pulse.mesh.material.emissiveIntensity = 0.95 + targetProgress * 0.95;
+          pulse.mesh.material.emissiveIntensity =
+            1.02 + targetProgress * 0.95 + breath * 0.22 + glint * 0.52 + glintFine * 0.65;
         } else {
-          // Soft breathing keeps idle stars alive without flicker.
-          pulse.mesh.material.emissiveIntensity = 0.62 + Math.sin(t * 0.8 + pulse.phase) * 0.11;
+          pulse.mesh.material.emissiveIntensity = 0.78 + breath + flicker + glint + glintFine;
+        }
+
+        const glow = pulse.glowSprite;
+        if (glow?.material) {
+          if (isSelected) {
+            glow.material.color.setRGB(1, 0.93, 0.79);
+          } else if (isTargeted) {
+            glow.material.color.setRGB(0.96, 0.89, 0.76);
+          } else {
+            glow.material.color.setRGB(0.82, 0.88, 1);
+          }
+          const glowPulse = 1 + breath * 0.15 + flicker * 0.13 + glint * 0.4 + glintFine * 0.45;
+          glow.scale.setScalar(pulse.glowSize * glowPulse);
+          const glowBase = CONSTELLATION_STAR_GLOW_OPACITY_BASE;
+          const glowOpacity =
+            (glowBase + breath * 0.09 + flicker * 0.078 + glint * 0.58 + glintFine * 0.42) *
+            starOpacity *
+            (isSelected ? 1.12 : isTargeted ? 1.04 + targetProgress * 0.14 : 1);
+          glow.material.opacity = Math.max(0.12, Math.min(0.92, glowOpacity));
         }
       }
       if (sceneState.constellationLineMaterial) {
-        sceneState.constellationLineMaterial.opacity = Math.max(0.1, lineOpacity);
+        sceneState.constellationLineMaterial.opacity = Math.max(0.1, lineCoreOpacity);
       }
 
       // Physics-like rotation: user impulse contributes velocity, then damping slows it.
@@ -1413,9 +1552,9 @@ export function highlightStar(starId) {
   for (const star of sceneState.starMeshes) {
     const isTarget = star.userData.starId === starId;
     const material = star.material;
-    material.emissive.setHex(isTarget ? 0xc6a45f : 0x2d3f7a);
-    material.emissiveIntensity = isTarget ? 1.35 : 0.7;
-    material.color.setHex(isTarget ? 0xfff4d9 : 0xdde7ff);
+    material.emissive.setHex(isTarget ? 0xc6a45f : 0x729dce);
+    material.emissiveIntensity = isTarget ? 1.35 : 0.88;
+    material.color.setHex(isTarget ? 0xfff4d9 : 0xebf1ff);
   }
 }
 
@@ -1447,9 +1586,9 @@ export function setTargetingStar(starId, progress = 0) {
       continue;
     }
 
-    material.emissive.setHex(0x2d3f7a);
-    material.emissiveIntensity = 0.7;
-    material.color.setHex(0xdde7ff);
+    material.emissive.setHex(0x729dce);
+    material.emissiveIntensity = 0.88;
+    material.color.setHex(0xebf1ff);
   }
 }
 
