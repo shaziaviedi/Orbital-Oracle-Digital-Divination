@@ -26,6 +26,16 @@ const STARFIELD_MIN_RADIUS = 0.9;
 const STARFIELD_MAX_RADIUS = 2.2;
 const STARFIELD_ENV_SCALE = 1.0;
 const STARFIELD_RADIUS_FALLOFF = 2.45;
+const LANDING_STARFIELD_COUNT = 520;
+const LANDING_STARFIELD_MIN_RADIUS = 1.25;
+const LANDING_STARFIELD_MAX_RADIUS = 3.05;
+const LANDING_STARFIELD_RADIUS_FALLOFF = 2.1;
+const LANDING_STARFIELD_CORE_SIZE = 0.034;
+const LANDING_STARFIELD_GLOW_SIZE = 0.11;
+const LANDING_STARFIELD_HALO_SIZE = 0.155;
+const LANDING_STARFIELD_CORE_OPACITY = 0.48;
+const LANDING_STARFIELD_GLOW_OPACITY = 0.2;
+const LANDING_STARFIELD_HALO_OPACITY = 0.085;
 const TRAIL_SCATTER_JITTER = 0.011;
 const PARTICLE_SIZE = 0.085;
 const PARTICLE_LIFETIME = 4200;
@@ -85,6 +95,19 @@ const sceneState = {
   starfieldGlowMaterial: null,
   starfieldHaloMaterial: null,
   resizeHandler: null,
+};
+
+const landingState = {
+  container: null,
+  renderer: null,
+  scene: null,
+  camera: null,
+  starfield: null,
+  starfieldCoreMaterial: null,
+  starfieldGlowMaterial: null,
+  starfieldHaloMaterial: null,
+  resizeHandler: null,
+  visible: false,
 };
 
 function clearSummonTrailGeometry() {
@@ -468,6 +491,67 @@ function createStarfield() {
   return group;
 }
 
+function createLandingStarfield() {
+  const starCount = LANDING_STARFIELD_COUNT;
+  const positions = new Float32Array(starCount * 3);
+
+  for (let i = 0; i < starCount; i += 1) {
+    const i3 = i * 3;
+    const angle = Math.random() * Math.PI * 2;
+    const inclination = Math.acos(1 - 2 * Math.random());
+    const radius =
+      LANDING_STARFIELD_MIN_RADIUS +
+      (LANDING_STARFIELD_MAX_RADIUS - LANDING_STARFIELD_MIN_RADIUS) *
+        Math.pow(Math.random(), LANDING_STARFIELD_RADIUS_FALLOFF);
+    positions[i3] = Math.cos(angle) * Math.sin(inclination) * radius;
+    positions[i3 + 1] = Math.sin(angle) * Math.sin(inclination) * radius * 0.9;
+    positions[i3 + 2] = Math.cos(inclination) * radius * 0.78;
+  }
+
+  const geometry = new THREE_NS.BufferGeometry();
+  geometry.setAttribute("position", new THREE_NS.BufferAttribute(positions, 3));
+
+  const coreMaterial = new THREE_NS.PointsMaterial({
+    color: 0xc9dcff,
+    size: LANDING_STARFIELD_CORE_SIZE,
+    transparent: true,
+    opacity: LANDING_STARFIELD_CORE_OPACITY,
+    depthWrite: false,
+    blending: THREE_NS.AdditiveBlending,
+  });
+  const glowMaterial = new THREE_NS.PointsMaterial({
+    color: 0xb2ccff,
+    size: LANDING_STARFIELD_GLOW_SIZE,
+    transparent: true,
+    opacity: LANDING_STARFIELD_GLOW_OPACITY,
+    depthWrite: false,
+    map: createStarGlowTexture(),
+    alphaTest: 0.02,
+    blending: THREE_NS.AdditiveBlending,
+  });
+  const haloMaterial = new THREE_NS.PointsMaterial({
+    color: 0x9fbfff,
+    size: LANDING_STARFIELD_HALO_SIZE,
+    transparent: true,
+    opacity: LANDING_STARFIELD_HALO_OPACITY,
+    depthWrite: false,
+    map: createStarGlowTexture(),
+    alphaTest: 0.01,
+    blending: THREE_NS.AdditiveBlending,
+  });
+
+  const group = new THREE_NS.Group();
+  group.scale.set(1.05, 1.05, 1.05);
+  const corePoints = new THREE_NS.Points(geometry, coreMaterial);
+  const glowPoints = new THREE_NS.Points(geometry.clone(), glowMaterial);
+  const haloPoints = new THREE_NS.Points(geometry.clone(), haloMaterial);
+  group.add(haloPoints, glowPoints, corePoints);
+  landingState.starfieldCoreMaterial = coreMaterial;
+  landingState.starfieldGlowMaterial = glowMaterial;
+  landingState.starfieldHaloMaterial = haloMaterial;
+  return group;
+}
+
 function createRitualCircleGroup() {
   const group = new THREE_NS.Group();
   sceneState.ritualMaterials = [];
@@ -771,6 +855,83 @@ function handleResize() {
   renderer.setSize(width, height, false);
   camera.aspect = width / height;
   camera.updateProjectionMatrix();
+}
+
+function handleLandingResize() {
+  const { container, renderer, camera } = landingState;
+  if (!container || !renderer || !camera) return;
+  const width = Math.max(container.clientWidth, 1);
+  const height = Math.max(container.clientHeight, 1);
+  renderer.setSize(width, height, false);
+  camera.aspect = width / height;
+  camera.updateProjectionMatrix();
+}
+
+export function initLandingStarfield(container) {
+  const THREE = getThreeOrThrow();
+  if (!container) {
+    throw new Error("initLandingStarfield(container) requires a valid container element.");
+  }
+  if (landingState.renderer) return landingState;
+
+  landingState.container = container;
+  landingState.scene = new THREE.Scene();
+  landingState.scene.background = null;
+  landingState.camera = new THREE.PerspectiveCamera(50, 1, 0.1, 100);
+  landingState.camera.position.set(0, 0, 5.2);
+
+  landingState.renderer = new THREE.WebGLRenderer({
+    antialias: true,
+    alpha: true,
+    powerPreference: "high-performance",
+  });
+  landingState.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  landingState.renderer.setClearColor(0x050816, 0.0);
+  landingState.renderer.domElement.style.position = "absolute";
+  landingState.renderer.domElement.style.inset = "0";
+  landingState.renderer.domElement.style.width = "100%";
+  landingState.renderer.domElement.style.height = "100%";
+  landingState.renderer.domElement.style.background = "transparent";
+  landingState.renderer.domElement.style.pointerEvents = "none";
+  landingState.renderer.domElement.style.transition = "opacity 280ms ease";
+  landingState.renderer.domElement.style.opacity = "0";
+
+  container.appendChild(landingState.renderer.domElement);
+  landingState.starfield = createLandingStarfield();
+  landingState.scene.add(landingState.starfield);
+  handleLandingResize();
+  landingState.resizeHandler = () => handleLandingResize();
+  window.addEventListener("resize", landingState.resizeHandler);
+
+  landingState.renderer.setAnimationLoop((timeMs) => {
+    if (!landingState.scene || !landingState.camera || !landingState.renderer || !landingState.starfield) return;
+    const t = timeMs * 0.001;
+    landingState.starfield.rotation.y += 0.00024;
+    landingState.starfield.rotation.x += 0.00005;
+    landingState.starfield.rotation.z += 0.00003;
+    if (landingState.starfieldCoreMaterial) {
+      landingState.starfieldCoreMaterial.opacity =
+        LANDING_STARFIELD_CORE_OPACITY + Math.sin(t * 0.48) * 0.026;
+    }
+    if (landingState.starfieldGlowMaterial) {
+      landingState.starfieldGlowMaterial.opacity =
+        LANDING_STARFIELD_GLOW_OPACITY + Math.sin(t * 0.8) * 0.026;
+    }
+    if (landingState.starfieldHaloMaterial) {
+      landingState.starfieldHaloMaterial.opacity =
+        LANDING_STARFIELD_HALO_OPACITY + Math.sin(t * 0.62) * 0.014;
+    }
+    landingState.renderer.render(landingState.scene, landingState.camera);
+  });
+
+  return landingState;
+}
+
+export function setLandingStarfieldVisible(visible) {
+  landingState.visible = Boolean(visible);
+  if (!landingState.starfield || !landingState.renderer?.domElement) return;
+  landingState.starfield.visible = landingState.visible;
+  landingState.renderer.domElement.style.opacity = landingState.visible ? "1" : "0";
 }
 
 export function initThreeScene(container) {
@@ -1237,7 +1398,7 @@ export function setConstellationMotionPaused(paused = false) {
 export function zoomConstellation(delta = 0) {
   if (!sceneState.constellationGroup || !Number.isFinite(delta)) return;
   const current = sceneState.constellationGroup.scale.x;
-  const next = Math.max(0.58, Math.min(1.7, current + delta));
+  const next = Math.max(0.58, Math.min(2.9, current + delta));
   sceneState.constellationGroup.scale.set(next, next, next);
 }
 

@@ -13,6 +13,14 @@
   color: var(--silver);
 }
 
+@font-face {
+  font-family: "MidnightConstellations";
+  src: url("./assets/fonts/Midnight-constellations.ttf") format("truetype");
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -42,6 +50,21 @@ body {
   transition: opacity 320ms ease;
 }
 
+#landing-scene-root {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+#landing-scene-root canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
 .page-atmosphere--scatter {
   background:
     radial-gradient(circle at 18% 24%, rgba(206, 220, 255, 0.62) 0 1px, transparent 1.4px),
@@ -61,12 +84,12 @@ body {
 
 .page-atmosphere--ritual {
   background:
-    radial-gradient(380px 280px at 50% 52%, rgba(168, 188, 240, 0.19), transparent 72%),
-    radial-gradient(circle at 46% 43%, rgba(201, 216, 255, 0.38) 0 1px, transparent 1.5px),
-    radial-gradient(circle at 54% 47%, rgba(201, 216, 255, 0.32) 0 0.95px, transparent 1.45px),
-    radial-gradient(circle at 50% 58%, rgba(201, 216, 255, 0.28) 0 0.85px, transparent 1.35px),
-    radial-gradient(circle at 42% 52%, rgba(201, 216, 255, 0.24) 0 0.75px, transparent 1.2px),
-    radial-gradient(circle at 58% 54%, rgba(201, 216, 255, 0.24) 0 0.75px, transparent 1.2px);
+    radial-gradient(420px 320px at 50% 54%, rgba(168, 188, 240, 0.17), transparent 74%),
+    radial-gradient(circle at 24% 34%, rgba(201, 216, 255, 0.3) 0 0.95px, transparent 1.45px),
+    radial-gradient(circle at 73% 29%, rgba(201, 216, 255, 0.26) 0 0.9px, transparent 1.4px),
+    radial-gradient(circle at 59% 61%, rgba(201, 216, 255, 0.24) 0 0.85px, transparent 1.35px),
+    radial-gradient(circle at 41% 68%, rgba(201, 216, 255, 0.2) 0 0.75px, transparent 1.2px),
+    radial-gradient(circle at 79% 74%, rgba(201, 216, 255, 0.18) 0 0.7px, transparent 1.15px);
   background-size:
     100% 100%,
     170px 170px,
@@ -74,7 +97,7 @@ body {
     210px 210px,
     160px 160px,
     160px 160px;
-  opacity: 0.18;
+  opacity: 0.16;
   animation: ritualAuraDrift 30s ease-in-out infinite;
 }
 
@@ -139,28 +162,61 @@ body {
 }
 
 .oracle-app.results-active .page-atmosphere--scatter {
-  opacity: 0.33;
+  opacity: 0.4;
 }
 
 .oracle-app.results-active .page-atmosphere--ritual {
-  opacity: 0.16;
+  opacity: 0.11;
 }
 
-.ritual-panel {
-  position: relative;
+.oracle-app.results-active .ritual-side-panel,
+.oracle-app.results-active .ritual-profile-panel,
+.oracle-app.results-active .ritual-hud,
+.oracle-app.results-active .ritual-hand-overlay,
+.oracle-app.results-active .ritual-video {
+  display: none;
+}
+
+.oracle-app:not(.ritual-active):not(.results-active) .page-atmosphere--ritual {
+  opacity: 0.11;
+}
+
+.landing-screen {
+  position: absolute;
+  inset: 0;
   z-index: 2;
-  width: min(92vw, 620px);
-  margin: clamp(2.5rem, 10vh, 7rem) auto 0;
-  padding: clamp(1.25rem, 2vw, 2rem);
-  border-radius: 18px;
-  border: 1px solid var(--line-soft);
+  display: grid;
+  place-items: center;
+  padding: clamp(1.5rem, 4vh, 3.25rem) 1.1rem;
+}
+
+.landing-screen::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
   background:
-    linear-gradient(140deg, rgba(9, 17, 45, 0.88), rgba(20, 18, 52, 0.72)),
-    var(--panel);
-  box-shadow:
-    0 10px 40px -18px var(--panel-shadow),
-    inset 0 0 0 1px rgba(183, 161, 113, 0.1);
-  backdrop-filter: blur(4px);
+    radial-gradient(60% 45% at 50% 46%, rgba(141, 166, 230, 0.1), transparent 70%),
+    radial-gradient(120% 90% at 50% 108%, rgba(4, 7, 16, 0.75), transparent 48%);
+  z-index: 0;
+}
+
+.landing-content {
+  --landing-title-width: min(96vw, 980px);
+  --landing-form-width: min(92vw, 660px);
+  position: relative;
+  z-index: 1;
+  width: var(--landing-title-width);
+  transform: translateY(clamp(12px, 2vh, 24px));
+  text-align: center;
+  display: grid;
+  justify-items: center;
+  gap: clamp(1.25rem, 2.4vh, 1.8rem);
+}
+
+.landing-header {
+  width: var(--landing-title-width);
+  margin-bottom: clamp(0.55rem, 1.7vh, 1rem);
 }
 
 .ritual-screen {
@@ -199,10 +255,11 @@ body {
   display: none;
 }
 
-.oracle-app.ritual-active .ritual-side-panel,
 .oracle-app.ritual-active .ritual-hud {
-  border-color: rgba(167, 185, 222, 0.18);
-  background: rgba(7, 15, 37, 0.46);
+  border-color: rgba(207, 185, 119, 0.62);
+  background:
+    linear-gradient(180deg, rgba(183, 161, 113, 0.16), rgba(183, 161, 113, 0.16)),
+    rgba(7, 15, 37, 0.62);
 }
 
 .ritual-side-panel {
@@ -233,6 +290,10 @@ body {
   backdrop-filter: blur(4px);
 }
 
+.ritual-metrics-panel {
+  display: none;
+}
+
 .ritual-info-block h3 {
   margin: 0 0 0.5rem;
   font-size: 0.9rem;
@@ -247,18 +308,267 @@ body {
   color: rgba(209, 220, 245, 0.9);
 }
 
+.ritual-instruction-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 0.58rem;
+}
+
+.ritual-instruction-list li {
+  margin: 0;
+  display: grid;
+  gap: 0.15rem;
+}
+
+.ritual-instruction-list strong {
+  font-size: 0.8rem;
+  color: #f4ecd8;
+  font-weight: 600;
+}
+
+.ritual-instruction-list span {
+  font-size: 0.77rem;
+  line-height: 1.32;
+  color: rgba(224, 232, 249, 0.9);
+}
+
 .ritual-hud {
   position: absolute;
-  left: calc(1rem + min(320px, 36vw) + 1rem);
-  right: calc(1rem + min(320px, 36vw) + 1rem);
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(46vw, 520px);
   bottom: 1.5rem;
   z-index: 3;
-  width: auto;
-  padding: 0.65rem 0.9rem;
-  border-radius: 12px;
-  border: 1px solid rgba(167, 185, 222, 0.24);
-  background: rgba(7, 15, 37, 0.62);
+  padding: 0.62rem 0.95rem;
+  border-radius: 14px;
+  border: 1px solid rgba(207, 185, 119, 0.62);
+  background:
+    linear-gradient(180deg, rgba(209, 189, 130, 0.3), rgba(183, 161, 113, 0.24)),
+    rgba(7, 15, 37, 0.62);
   backdrop-filter: blur(4px);
+  overflow: hidden;
+  box-shadow:
+    inset 0 0 0 1px rgba(244, 236, 216, 0.12),
+    inset 0 10px 18px -18px rgba(239, 221, 169, 0.45),
+    0 10px 24px -18px rgba(183, 161, 113, 0.58);
+}
+
+.ritual-onboarding-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  display: grid;
+  place-items: center;
+  padding: 1.2rem;
+  background: radial-gradient(70% 70% at 50% 50%, rgba(6, 11, 26, 0.28), rgba(4, 9, 22, 0.62));
+  backdrop-filter: blur(3px);
+}
+
+.ritual-onboarding-card {
+  position: relative;
+  isolation: isolate;
+  width: min(92vw, 720px);
+  padding: 1.8rem 1.7rem;
+  border-radius: 14px;
+  border: 1px solid rgba(167, 185, 222, 0.24);
+  overflow: hidden;
+  background: linear-gradient(160deg, rgba(8, 16, 40, 0.85), rgba(16, 18, 50, 0.78));
+  box-shadow:
+    0 14px 36px -26px rgba(64, 103, 198, 0.72),
+    inset 0 0 0 1px rgba(183, 161, 113, 0.08);
+}
+
+.ritual-onboarding-card::before,
+.ritual-onboarding-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.ritual-onboarding-card::before {
+  background:
+    radial-gradient(circle at 18% 24%, rgba(206, 220, 255, 0.62) 0 1px, transparent 1.4px),
+    radial-gradient(circle at 74% 28%, rgba(206, 220, 255, 0.5) 0 1px, transparent 1.45px),
+    radial-gradient(circle at 42% 64%, rgba(206, 220, 255, 0.44) 0 0.9px, transparent 1.3px),
+    radial-gradient(circle at 82% 72%, rgba(206, 220, 255, 0.4) 0 0.8px, transparent 1.2px),
+    radial-gradient(circle at 28% 82%, rgba(206, 220, 255, 0.35) 0 0.75px, transparent 1.15px);
+  background-size:
+    260px 220px,
+    320px 280px,
+    230px 210px,
+    280px 250px,
+    210px 190px;
+  opacity: 0.4;
+  animation: landingStarDrift 26s linear infinite;
+}
+
+.ritual-onboarding-card::after {
+  background:
+    radial-gradient(420px 320px at 50% 54%, rgba(168, 188, 240, 0.17), transparent 74%),
+    radial-gradient(circle at 24% 34%, rgba(201, 216, 255, 0.3) 0 0.95px, transparent 1.45px),
+    radial-gradient(circle at 73% 29%, rgba(201, 216, 255, 0.26) 0 0.9px, transparent 1.4px),
+    radial-gradient(circle at 59% 61%, rgba(201, 216, 255, 0.24) 0 0.85px, transparent 1.35px),
+    radial-gradient(circle at 41% 68%, rgba(201, 216, 255, 0.2) 0 0.75px, transparent 1.2px),
+    radial-gradient(circle at 79% 74%, rgba(201, 216, 255, 0.18) 0 0.7px, transparent 1.15px);
+  background-size:
+    100% 100%,
+    170px 170px,
+    190px 190px,
+    210px 210px,
+    160px 160px,
+    160px 160px;
+  opacity: 0.11;
+  animation: ritualAuraDrift 30s ease-in-out infinite;
+}
+
+.ritual-onboarding-card > * {
+  position: relative;
+  z-index: 1;
+}
+
+.ritual-onboarding-card h3 {
+  margin: 0 0 1.02rem;
+  font-family: "MidnightConstellations", "Inter", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  font-size: clamp(1.9rem, 4.1vw, 2.75rem);
+  line-height: 1.04;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  text-wrap: nowrap;
+  padding-bottom: 0.08em;
+  color: #f7fbff;
+  background: linear-gradient(180deg, #f8fbff 8%, #d8e6ff 58%, #bfd5ff 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  text-shadow:
+    0 0 12px rgba(188, 207, 255, 0.3),
+    0 0 28px rgba(122, 152, 221, 0.2);
+}
+
+.ritual-onboarding-card p {
+  margin: 0 0 0.72rem;
+  font-size: clamp(0.96rem, 2vw, 1.08rem);
+  line-height: 1.56;
+  color: rgba(218, 228, 250, 0.9);
+}
+
+.summon-onboarding-layout {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  text-align: left;
+  gap: 0.12rem;
+  min-height: 340px;
+}
+
+.summon-onboarding-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  max-width: 560px;
+}
+
+.summon-onboarding-copy p {
+  margin-bottom: 0;
+}
+
+.onboarding-mode-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1.05rem;
+  margin-bottom: 1.15rem;
+}
+
+.onboarding-mode-item {
+  display: grid;
+  justify-items: center;
+  align-content: start;
+  gap: 0.36rem;
+}
+
+.onboarding-mode-item h4 {
+  margin: 0;
+  font-size: 0.88rem;
+  color: #f3edd9;
+  text-align: center;
+}
+
+.onboarding-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  object-fit: contain;
+}
+
+.summon-onboarding-visual {
+  align-self: center;
+  width: min(100%, 390px);
+  aspect-ratio: 1000 / 661;
+  overflow: hidden;
+}
+
+.summon-onboarding-image {
+  width: 100%;
+  height: auto;
+  max-width: 100%;
+  margin-left: 0;
+  object-fit: contain;
+  transform: translateY(-17.5%);
+  transform-origin: top center;
+  max-height: none;
+}
+
+.mode-image-crop {
+  width: min(100%, 230px);
+  height: 168px;
+  overflow: hidden;
+}
+
+.mode-onboarding-image {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  object-fit: cover;
+  object-position: 50% 50%;
+  transform: scale(1.12);
+}
+
+#constellation-onboarding-card > p {
+  margin-bottom: 1.95rem;
+}
+
+#constellation-onboarding-card .onboarding-mode-list {
+  margin-bottom: 1.4rem;
+}
+
+#summon-onboarding-continue,
+#constellation-onboarding-continue {
+  margin-top: 1.05rem;
+  border: 1px solid rgba(199, 183, 137, 0.7);
+  border-radius: 999px;
+  padding: 0.5rem 0.8rem;
+  background: linear-gradient(180deg, rgba(200, 183, 134, 0.24), rgba(112, 97, 70, 0.18));
+  color: #f7f2e6;
+  cursor: pointer;
+}
+
+#summon-onboarding-continue {
+  margin-top: auto;
+  align-self: flex-end;
+  min-width: 180px;
+  text-align: center;
+}
+
+#constellation-onboarding-continue {
+  display: block;
+  margin-top: 1.2rem;
+  margin-left: auto;
+  min-width: 200px;
+  text-align: center;
 }
 
 .profile-row {
@@ -275,55 +585,43 @@ body {
   opacity: 1;
 }
 
-.ritual-panel::before {
-  content: "";
-  position: absolute;
-  inset: 8px;
-  border-radius: 14px;
-  pointer-events: none;
-  border: 1px solid rgba(187, 170, 121, 0.12);
-  background:
-    radial-gradient(circle at 16px 16px, rgba(183, 161, 113, 0.22), transparent 8px),
-    radial-gradient(circle at calc(100% - 16px) 16px, rgba(183, 161, 113, 0.22), transparent 8px),
-    radial-gradient(
-      circle at 16px calc(100% - 16px),
-      rgba(183, 161, 113, 0.22),
-      transparent 8px
-    ),
-    radial-gradient(
-      circle at calc(100% - 16px) calc(100% - 16px),
-      rgba(183, 161, 113, 0.22),
-      transparent 8px
-    );
-  opacity: 0.35;
+.landing-header h1 {
+  margin: 0 0 clamp(0.45rem, 1.2vh, 0.85rem);
+  font-family: "MidnightConstellations", "Inter", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  font-size: clamp(2.75rem, 12.2vw, 7.2rem);
+  font-weight: 640;
+  letter-spacing: 0.022em;
+  line-height: 1.04;
+  padding-top: 0.08em;
+  color: #f7fbff;
+  background: linear-gradient(180deg, #f8fbff 8%, #d8e6ff 58%, #bfd5ff 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  white-space: nowrap;
+  text-wrap: nowrap;
+  overflow-wrap: normal;
+  text-shadow:
+    0 0 18px rgba(188, 207, 255, 0.34),
+    0 0 52px rgba(122, 152, 221, 0.24);
+  animation: landingTitleBreathe 8.5s ease-in-out infinite;
 }
 
-.ritual-header h1 {
-  margin: 0;
-  font-size: clamp(1.9rem, 3.8vw, 2.7rem);
-  font-weight: 640;
-  letter-spacing: 0.02em;
-  color: #f4f7ff;
+.landing-header p {
+  margin: 0 auto 0;
+  width: var(--landing-form-width);
+  line-height: 1.56;
+  font-size: clamp(0.96rem, 2vw, 1.08rem);
+  color: rgba(221, 230, 248, 0.94);
+  letter-spacing: 0.01em;
+  max-width: var(--landing-form-width);
   text-wrap: balance;
 }
 
-.ritual-header p {
-  margin: 0.65rem 0 0;
-  line-height: 1.5;
-  color: rgba(220, 227, 243, 0.9);
-  max-width: 52ch;
-}
-
-.question-field {
-  margin-top: 1.2rem;
-}
-
-.question-field label {
-  display: inline-block;
-  margin-bottom: 0.45rem;
-  font-size: 0.9rem;
-  letter-spacing: 0.02em;
-  color: rgba(221, 227, 242, 0.92);
+.landing-question-field {
+  width: var(--landing-form-width);
+  margin-top: 0;
+  text-align: left;
 }
 
 .question-error {
@@ -347,14 +645,17 @@ button {
 
 textarea {
   width: 100%;
-  resize: vertical;
-  min-height: 5rem;
-  padding: 0.75rem 0.85rem;
-  border-radius: 12px;
-  border: 1px solid rgba(167, 185, 222, 0.33);
-  background: rgba(7, 15, 37, 0.75);
+  resize: none;
+  min-height: 4.35rem;
+  max-height: 4.35rem;
+  padding: 0.6rem 0.82rem;
+  line-height: 1.42;
+  border-radius: 14px;
+  border: 1px solid rgba(173, 194, 238, 0.38);
+  background: linear-gradient(165deg, rgba(8, 16, 40, 0.78), rgba(16, 19, 49, 0.72));
   outline: none;
-  transition: border-color 160ms ease, box-shadow 160ms ease;
+  transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
+  backdrop-filter: blur(1.5px);
 }
 
 textarea::placeholder {
@@ -362,28 +663,43 @@ textarea::placeholder {
 }
 
 textarea:focus {
-  border-color: rgba(184, 170, 130, 0.75);
-  box-shadow: 0 0 0 3px rgba(183, 161, 113, 0.14);
+  border-color: rgba(198, 180, 135, 0.82);
+  box-shadow:
+    0 0 0 2px rgba(183, 161, 113, 0.16),
+    0 0 30px -18px rgba(183, 161, 113, 0.72);
+  background: linear-gradient(165deg, rgba(10, 18, 45, 0.84), rgba(20, 21, 55, 0.76));
 }
 
 #begin-button {
-  margin-top: 0.9rem;
-  width: 100%;
-  border: 1px solid rgba(190, 174, 130, 0.6);
-  border-radius: 12px;
-  padding: 0.72rem 1rem;
-  background: linear-gradient(180deg, rgba(190, 174, 130, 0.22), rgba(108, 95, 68, 0.16));
+  margin-top: 0.2rem;
+  min-width: 220px;
+  border: 1px solid rgba(205, 189, 144, 0.7);
+  border-radius: 999px;
+  padding: 0.82rem 1.55rem;
+  background: linear-gradient(
+    180deg,
+    rgba(209, 190, 142, 0.3),
+    rgba(118, 103, 71, 0.16)
+  );
   color: #f7f4e8;
-  font-weight: 560;
-  letter-spacing: 0.01em;
+  font-weight: 580;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
   cursor: pointer;
-  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
+  box-shadow:
+    0 0 0 1px rgba(218, 201, 158, 0.14) inset,
+    0 0 26px -9px rgba(199, 176, 121, 0.66);
+  animation: ritualButtonPulse 2.9s ease-in-out infinite;
+  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease, filter 160ms ease;
 }
 
 #begin-button:hover {
-  transform: translateY(-1px);
-  border-color: rgba(203, 184, 132, 0.82);
-  box-shadow: 0 10px 24px -15px rgba(183, 161, 113, 0.75);
+  transform: translateY(-2px);
+  border-color: rgba(224, 206, 159, 0.9);
+  box-shadow:
+    0 0 0 1px rgba(225, 209, 167, 0.18) inset,
+    0 0 30px -9px rgba(211, 187, 131, 0.84);
+  filter: brightness(1.04);
 }
 
 #begin-button:active {
@@ -391,33 +707,31 @@ textarea:focus {
 }
 
 .status-text {
-  margin: 0.8rem 0 0;
-  min-height: 1.25rem;
-  font-size: 0.9rem;
-  color: rgba(201, 211, 233, 0.82);
-}
-
-.hand-detection-status {
-  margin: 0.2rem 0 0.2rem;
-  min-height: 1rem;
+  margin: 0;
+  min-height: 1.05rem;
   font-size: 0.8rem;
-  letter-spacing: 0.01em;
-  color: rgba(214, 226, 252, 0.92);
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #f4ecd8;
 }
 
 .result-panel {
   --result-accent: #b7a171;
-  position: relative;
+  position: absolute;
+  top: 50%;
+  left: 50%;
   z-index: 2;
   width: min(92vw, 620px);
-  margin: 1rem auto 2rem;
-  padding: 1rem 1.15rem;
+  margin: 0;
+  padding: 1.8rem 1.7rem;
   border-radius: 14px;
   border: 1px solid color-mix(in srgb, var(--result-accent) 35%, rgba(162, 181, 220, 0.3));
   background: linear-gradient(165deg, rgba(8, 14, 33, 0.84), rgba(18, 19, 46, 0.8));
   box-shadow: 0 12px 30px -22px rgba(45, 86, 188, 0.45);
   opacity: 0;
-  transform: translateY(16px);
+  transform: translate(-50%, calc(-50% + 16px));
   transition:
     opacity 560ms ease,
     transform 620ms cubic-bezier(0.2, 0.8, 0.2, 1),
@@ -449,16 +763,53 @@ textarea:focus {
   }
 }
 
+@keyframes ritualButtonPulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px rgba(218, 201, 158, 0.14) inset,
+      0 0 22px -12px rgba(199, 176, 121, 0.55);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px rgba(229, 214, 178, 0.22) inset,
+      0 0 32px -8px rgba(219, 193, 138, 0.9);
+  }
+}
+
+@keyframes landingTitleBreathe {
+  0%,
+  100% {
+    transform: translateY(0);
+    filter: brightness(1);
+  }
+  50% {
+    transform: translateY(-1px);
+    filter: brightness(1.05);
+  }
+}
+
 .result-panel.is-visible {
   opacity: 1;
-  transform: translateY(0);
+  transform: translate(-50%, -50%);
   pointer-events: auto;
 }
 
 .result-panel h2 {
   margin: 0 0 0.5rem;
-  color: color-mix(in srgb, #f1f5ff 72%, var(--result-accent));
-  font-size: 1.06rem;
+  font-family: "MidnightConstellations", "Inter", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  color: #f7fbff;
+  background: linear-gradient(180deg, #f8fbff 8%, #d8e6ff 58%, #bfd5ff 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  font-size: clamp(1.9rem, 4.1vw, 2.75rem);
+  line-height: 1.04;
+  letter-spacing: 0.01em;
+  padding-bottom: 0.08em;
+  text-shadow:
+    0 0 18px rgba(188, 207, 255, 0.34),
+    0 0 52px rgba(122, 152, 221, 0.24);
 }
 
 .result-question-label {
@@ -469,41 +820,85 @@ textarea:focus {
   color: rgba(194, 204, 227, 0.7);
 }
 
+.result-reading-label {
+  margin: 0.9rem 0 0.4rem;
+  font-size: 0.74rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(194, 204, 227, 0.68);
+}
+
 .result-question {
   margin: 0 0 0.7rem;
   color: rgba(231, 237, 248, 0.95);
   line-height: 1.45;
 }
 
+.result-verdict {
+  margin: 0;
+  font-size: clamp(1.08rem, 2.3vw, 1.35rem);
+  line-height: 1.08;
+  letter-spacing: 0.02em;
+  font-weight: 620;
+  color: #f4ecd8;
+}
+
 .result-star {
-  margin: 0 0 0.65rem;
-  color: color-mix(in srgb, #edf2ff 58%, var(--result-accent));
-  font-weight: 560;
-  letter-spacing: 0.01em;
+  margin: 0 0 0.9rem;
+  color: #f4ecd8;
+  font-size: clamp(1.08rem, 2.3vw, 1.35rem);
+  line-height: 1.08;
+  font-weight: 620;
+  letter-spacing: 0.02em;
+}
+
+.result-short-answer {
+  margin: 0;
+  color: rgba(237, 242, 252, 0.96);
+  font-size: 1rem;
+  line-height: 1.45;
 }
 
 #oracle-answer {
-  margin: 0;
+  margin: 1.2rem 0 0;
   line-height: 1.5;
   color: rgba(226, 233, 246, 0.94);
 }
 
+.result-interpretation {
+  margin: 1.9rem 0 0;
+  line-height: 1.62;
+  color: rgba(226, 233, 246, 0.94);
+}
+
 #again-button {
-  margin-top: 0.95rem;
-  border: 1px solid color-mix(in srgb, var(--result-accent) 55%, rgba(190, 174, 130, 0.52));
-  border-radius: 10px;
-  padding: 0.52rem 0.8rem;
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--result-accent) 25%, rgba(190, 174, 130, 0.18)),
-    rgba(79, 74, 92, 0.16)
-  );
-  color: #f4f6fb;
+  display: block;
+  margin-top: 1.65rem;
+  margin-left: auto;
+  border: 1px solid rgba(199, 183, 137, 0.7);
+  border-radius: 999px;
+  padding: 0.5rem 0.8rem;
+  background: linear-gradient(180deg, rgba(200, 183, 134, 0.24), rgba(112, 97, 70, 0.18));
+  color: #f7f2e6;
   cursor: pointer;
+  box-shadow:
+    0 0 0 1px rgba(218, 201, 158, 0.14) inset,
+    0 0 26px -9px rgba(199, 176, 121, 0.66);
+  animation: ritualButtonPulse 2.9s ease-in-out infinite;
+  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease, filter 160ms ease;
 }
 
 #again-button:hover {
+  transform: translateY(-2px);
+  border-color: rgba(224, 206, 159, 0.9);
+  box-shadow:
+    0 0 0 1px rgba(225, 209, 167, 0.18) inset,
+    0 0 30px -9px rgba(211, 187, 131, 0.84);
   filter: brightness(1.05);
+}
+
+#again-button:active {
+  transform: translateY(0);
 }
 
 .is-hidden {
@@ -511,12 +906,23 @@ textarea:focus {
 }
 
 @media (max-width: 620px) {
-  .ritual-panel {
-    margin-top: 1.75rem;
+  .landing-content {
+    --landing-title-width: min(97vw, 980px);
+    --landing-form-width: min(92vw, 660px);
   }
 
-  .ritual-header h1 {
-    font-size: clamp(1.8rem, 10vw, 2.25rem);
+  .landing-screen {
+    padding: 1.35rem 1rem 1.75rem;
+  }
+
+  .landing-header h1 {
+    font-size: clamp(2.2rem, 11.4vw, 4.2rem);
+    letter-spacing: 0.017em;
+  }
+
+  textarea {
+    min-height: 4.1rem;
+    max-height: 4.1rem;
   }
 
   .ritual-side-panel {
@@ -525,9 +931,9 @@ textarea:focus {
   }
 
   .ritual-hud {
-    left: 1rem;
-    right: 1rem;
-    width: calc(100% - 2rem);
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(90vw, 520px);
   }
 
   .ritual-profile-panel {
@@ -535,5 +941,50 @@ textarea:focus {
     max-width: none;
     top: auto;
     bottom: 7.8rem;
+  }
+
+  .summon-onboarding-layout {
+    gap: 0.2rem;
+    min-height: 0;
+  }
+
+  .ritual-onboarding-card h3 {
+    font-size: clamp(1.45rem, 7vw, 1.95rem);
+  }
+
+  .summon-onboarding-copy p {
+    margin-bottom: 0.22rem;
+  }
+
+  #summon-onboarding-continue {
+    margin-top: 0.2rem;
+  }
+
+  .summon-onboarding-visual {
+    width: min(100%, 320px);
+    aspect-ratio: 1000 / 661;
+  }
+
+  .summon-onboarding-image {
+    width: 100%;
+    height: auto;
+    margin-left: 0;
+    object-fit: contain;
+    transform: translateY(-17.5%);
+    transform-origin: top center;
+    max-height: none;
+  }
+
+  .onboarding-mode-list {
+    gap: 0.7rem;
+    margin-bottom: 1rem;
+  }
+
+  .mode-image-crop {
+    height: 130px;
+  }
+
+  .mode-onboarding-image {
+    transform: scale(1.1);
   }
 }

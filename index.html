@@ -10,27 +10,29 @@
     <main class="oracle-app">
       <div class="page-atmosphere page-atmosphere--ritual" aria-hidden="true"></div>
       <div class="page-atmosphere page-atmosphere--scatter" aria-hidden="true"></div>
+      <section id="landing-scene-root" aria-hidden="true"></section>
 
-      <section id="landing-screen" class="ritual-panel" aria-label="Orbital Oracle landing screen">
-        <header class="ritual-header">
-          <h1>Orbital Oracle</h1>
-          <p>
-            Speak your question, trace the circle of intention, and reveal the star
-            that answers.
-          </p>
-        </header>
+      <section id="landing-screen" class="landing-screen" aria-label="Orbital Oracle landing screen">
+        <div class="landing-content">
+          <header class="landing-header">
+            <h1>Orbital Oracle</h1>
+            <p>
+              Speak your question, trace the circle of intention, and reveal the
+              star that answers.
+            </p>
+          </header>
 
-        <div class="question-field">
-          <label for="question-input">Your Question</label>
-          <textarea
-            id="question-input"
-            rows="3"
-            placeholder="What guidance should I seek tonight?"
-          ></textarea>
-          <p id="question-error" class="question-error" role="alert"></p>
+          <div class="landing-question-field">
+            <textarea
+              id="question-input"
+              rows="2"
+              placeholder="Write down your question to lock in your intention."
+            ></textarea>
+            <p id="question-error" class="question-error" role="alert"></p>
+          </div>
+
+          <button id="begin-button" type="button">Begin Ritual</button>
         </div>
-
-        <button id="begin-button" type="button">Begin Ritual</button>
       </section>
 
       <section id="ritual-screen" class="ritual-screen is-hidden" aria-label="Orbital Oracle ritual screen">
@@ -40,19 +42,30 @@
         <aside class="ritual-side-panel" aria-label="Interaction guide and hand detection">
           <section class="ritual-info-block">
             <h3>Instructions</h3>
-            <p>Pinch with both hands -> Zoom constellation</p>
-            <p>Open one hand + move other index finger -> Rotate constellation</p>
-            <p>Make a fist with one hand -> Pause constellation</p>
-            <p>While paused, use other index finger -> Select star</p>
+            <ul class="ritual-instruction-list">
+              <li>
+                <strong>Summon</strong>
+                <span>Raise your index and middle finger, then trace a circle.</span>
+              </li>
+              <li>
+                <strong>Rotate</strong>
+                <span>Use a pointing hand to guide the constellation.</span>
+              </li>
+              <li>
+                <strong>Zoom</strong>
+                <span>Pinch with both hands and move closer or farther.</span>
+              </li>
+              <li>
+                <strong>Pause + select</strong>
+                <span>Make a fist with one hand, then choose with the other.</span>
+              </li>
+            </ul>
           </section>
-          <section class="ritual-info-block">
+          <section id="hand-detection-card" class="ritual-info-block">
             <h3>Hand Position Detection</h3>
-            <p id="hand-detection-status" class="hand-detection-status">No hand detected</p>
-            <p>Hand 1: <span id="hand1-state">Unknown</span></p>
-            <p>Hand 2: <span id="hand2-state">Unknown</span></p>
+            <p>Left hand: <span id="hand1-state">Unknown</span></p>
+            <p>Right hand: <span id="hand2-state">Unknown</span></p>
             <p>Current mode: <span id="active-mode">None</span></p>
-            <p>Role A: <span id="role-primary">None</span></p>
-            <p>Role B: <span id="role-secondary">None</span></p>
           </section>
         </aside>
         <aside class="ritual-profile-panel" aria-label="Circle profile debug panel">
@@ -64,7 +77,7 @@
             <p id="profile-fragmented" class="profile-row">Fragmented Circle</p>
             <p id="profile-deliberate" class="profile-row">Deliberate Circle</p>
           </section>
-          <section class="ritual-info-block">
+          <section class="ritual-info-block ritual-metrics-panel">
             <h3>Circle Metrics</h3>
             <p>Current: <span id="profile-current">--</span></p>
             <p>Confidence: <span id="profile-confidence">--</span></p>
@@ -80,14 +93,89 @@
         <div class="ritual-hud">
           <p id="status-text" class="status-text"></p>
         </div>
+        <section
+          id="ritual-onboarding-overlay"
+          class="ritual-onboarding-overlay is-hidden"
+          aria-live="polite"
+          aria-label="Ritual onboarding"
+        >
+          <article id="summon-onboarding-card" class="ritual-onboarding-card is-hidden">
+            <div class="summon-onboarding-layout">
+              <div class="summon-onboarding-copy">
+                <h3>Begin the Summoning Ritual</h3>
+                <p>
+                  First you will have to summon a constellation. Start by holding up one hand in
+                  this position.
+                </p>
+              </div>
+              <div class="summon-onboarding-visual">
+                <img
+                  class="onboarding-image summon-onboarding-image"
+                  src="./assets/images/hand-summon.png"
+                  alt="Summon gesture guide"
+                />
+              </div>
+              <button id="summon-onboarding-continue" type="button">Start</button>
+            </div>
+          </article>
+
+          <article id="constellation-onboarding-card" class="ritual-onboarding-card is-hidden">
+            <h3>Constellation Navigation</h3>
+            <p>
+              You have summoned the constellation oracle. Seek your answers by exploring and
+              navigating through the constellation and select your destiny.
+            </p>
+
+            <div class="onboarding-mode-list">
+              <section class="onboarding-mode-item">
+                <h4>Rotate</h4>
+                <div class="mode-image-crop">
+                  <img
+                    class="onboarding-image mode-onboarding-image"
+                    src="./assets/images/hand-rotate.png"
+                    alt="Rotate mode hand positions"
+                  />
+                </div>
+              </section>
+
+              <section class="onboarding-mode-item">
+                <h4>Zoom</h4>
+                <div class="mode-image-crop">
+                  <img
+                    class="onboarding-image mode-onboarding-image"
+                    src="./assets/images/hand-zoom.png"
+                    alt="Zoom mode hand positions"
+                  />
+                </div>
+              </section>
+
+              <section class="onboarding-mode-item">
+                <h4>Pause + Select</h4>
+                <div class="mode-image-crop">
+                  <img
+                    class="onboarding-image mode-onboarding-image"
+                    src="./assets/images/hand-select.png"
+                    alt="Pause and select mode hand positions"
+                  />
+                </div>
+              </section>
+            </div>
+
+            <button id="constellation-onboarding-continue" type="button">Continue</button>
+          </article>
+        </section>
       </section>
 
       <aside id="result-panel" class="result-panel" hidden aria-live="polite">
         <h2>Revelation</h2>
         <p class="result-question-label">Your question</p>
         <p id="result-question" class="result-question"></p>
+        <p class="result-reading-label">Verdict</p>
+        <p id="result-verdict" class="result-verdict">--</p>
+        <p class="result-reading-label">Card</p>
         <p id="result-star" class="result-star"></p>
-        <p id="oracle-answer">No answer yet.</p>
+        <p id="result-short-answer" class="result-short-answer">No answer yet.</p>
+        <p id="oracle-answer" class="result-interpretation">No interpretation yet.</p>
         <button id="again-button" type="button">Begin Another Ritual</button>
       </aside>
     </main>

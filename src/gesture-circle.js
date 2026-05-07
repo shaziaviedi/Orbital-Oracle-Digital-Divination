@@ -135,6 +135,10 @@ export class CircleGestureDetector {
     const windingTurns = windingInfo.turns;
     const angularTravel = this.#computeAngularTravel(analysisPoints, center);
     const revolutions = angularTravel.absRadians / (Math.PI * 2);
+    const radialVariance =
+      radii.reduce((sum, radius) => sum + (radius - meanRadius) ** 2, 0) / Math.max(radii.length, 1);
+    const radialStdDev = Math.sqrt(radialVariance);
+    const radialSpread = radialStdDev / Math.max(meanRadius, 0.0001);
     const roundness = this.#computeRoundness(radii, meanRadius);
     const steadiness = this.#computeSteadiness(analysisPoints);
     const continuity = this.#computeContinuity(analysisPoints);
@@ -198,6 +202,11 @@ export class CircleGestureDetector {
       steadiness: Number(steadinessScore.toFixed(3)),
       continuityScore: Number(continuityScore.toFixed(3)),
       discontinuityIndex: Number(discontinuityIndex.toFixed(3)),
+      jumpCount: continuity.jumpCount ?? 0,
+      jumpRatio: Number((continuity.jumpRatio ?? 0).toFixed(3)),
+      largestJumpRatio: Number((continuity.maxRatio ?? 0).toFixed(3)),
+      radialSpread: Number(radialSpread.toFixed(3)),
+      radialVariance: Number(radialVariance.toFixed(6)),
       speed: Number(speed.toFixed(3)),
       sizeScore: Number(sizeScore.toFixed(3)),
       circularityScore: Number(circularityScore.toFixed(3)),
@@ -347,14 +356,14 @@ export class CircleGestureDetector {
 
   #computeContinuity(points) {
     if (!Array.isArray(points) || points.length < 4) {
-      return { score: 0, discontinuityIndex: 1 };
+      return { score: 0, discontinuityIndex: 1, jumpCount: 0, jumpRatio: 1, maxRatio: 4 };
     }
     const segments = [];
     for (let i = 1; i < points.length; i += 1) {
       segments.push(dist(points[i - 1], points[i]));
     }
     const mean = average(segments);
-    if (mean <= 0.0001) return { score: 0, discontinuityIndex: 1 };
+    if (mean <= 0.0001) return { score: 0, discontinuityIndex: 1, jumpCount: 0, jumpRatio: 1, maxRatio: 4 };
     const jumpThreshold = mean * 2.65;
     const jumpCount = segments.filter((segment) => segment > jumpThreshold).length;
     const jumpRatio = jumpCount / Math.max(segments.length, 1);
@@ -363,6 +372,9 @@ export class CircleGestureDetector {
     return {
       score: clamp01(1 - discontinuityIndex),
       discontinuityIndex,
+      jumpCount,
+      jumpRatio,
+      maxRatio,
     };
   }
 }

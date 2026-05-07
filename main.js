@@ -17,6 +17,8 @@ import {
   setConstellationDimmed,
   setTargetingStar,
   showConstellation,
+  initLandingStarfield,
+  setLandingStarfieldVisible,
 } from "./src/three-scene.js";
 import { createOracleEngine, loadOracleData } from "./src/oracle-engine.js";
 
@@ -32,6 +34,9 @@ const REVEAL_DELAY_MS = 520;
 const DRAW_CAPTURE_DURATION = 36000; // Safety cap; completion is gated by revolutions.
 const MIN_REVOLUTIONS_REQUIRED = 3;
 const SUMMON_DEBUG_LOG_INTERVAL_MS = 260;
+const SUMMON_POSE_HOLD_FRAMES = 2;
+const SUMMON_FINGERTIP_GRACE_FRAMES = 8;
+const ROTATE_POINT_GRACE_FRAMES = 6;
 const PINCH_THRESHOLD = 0.055;
 const OPEN_FINGER_THRESHOLD = 1.08;
 const FIST_CURLED_FINGER_THRESHOLD = 3;
@@ -41,7 +46,7 @@ const rotationSensitivityX = 5.2; // Horizontal fingertip motion -> yaw
 const rotationSensitivityY = 4.2; // Vertical fingertip motion -> pitch
 const smoothingFactor = 0.32;
 const SUMMON_INSTRUCTION =
-  "With one hand, draw a circle in the air using your index and middle fingers. Your gesture shapes the oracle.";
+  "Show one hand with the index and middle finger raised.";
 
 const HAND_CONNECTIONS = [
   [0, 1],
@@ -337,6 +342,19 @@ function isPointRaw(landmarks) {
   return curledOthers >= 2;
 }
 
+function isSummonRaw(landmarks) {
+  if (!Array.isArray(landmarks) || landmarks.length < 21) return false;
+  const palm = getPalmCenter(landmarks);
+  if (!palm) return false;
+  if (isPinchRaw(landmarks)) return false;
+  const indexExtended = isFingerExtended(landmarks, 8, 6, 5, palm, 1.08);
+  const middleExtended = isFingerExtended(landmarks, 12, 10, 9, palm, 1.07);
+  if (!indexExtended || !middleExtended) return false;
+  const ringCurled = isFingerCurled(landmarks, 16, 14, 13, palm);
+  const pinkyCurled = isFingerCurled(landmarks, 20, 18, 17, palm);
+  return ringCurled && pinkyCurled;
+}
+
 function isPinchRaw(landmarks) {
   if (!Array.isArray(landmarks) || landmarks.length < 21) return false;
   const thumbTip = landmarks[4];
@@ -372,8 +390,9 @@ function isOpenRaw(landmarks) {
 
 function classifyHandRaw(landmarks) {
   // Explicit priority keeps states distinct and debuggable:
-  // Pinch > Point > Fist > Open > Unknown.
+  // Pinch > Summon > Point > Fist > Open > Unknown.
   if (isPinchRaw(landmarks)) return "Pinch";
+  if (isSummonRaw(landmarks)) return "Summon";
   if (isPointRaw(landmarks)) return "Point";
   if (isFistRaw(landmarks)) return "Fist";
   if (isOpenRaw(landmarks)) return "Open";
@@ -517,18 +536,43 @@ function resolveInteractionMode(hands = []) {
     return { mode: "zoom", zoomHands: pinchHands };
   }
 
-  const openHand = hands.find((hand) => hand.stableLabel === "Open") ?? null;
-  if (openHand) {
-    const rotationHand =
-      hands.find((hand) => hand.key !== openHand.key && hand.stableLabel === "Point" && hand.indexTip) ??
-      hands.find((hand) => hand.key !== openHand.key && hand.indexTip) ??
-      null;
-    if (rotationHand) {
-      return { mode: "rotate", openHand, rotationHand };
-    }
+  const pointHands = hands.filter((hand) => hand.stableLabel === "Point" && hand.indexTip);
+  if (pointHands.length > 0) {
+    const rotationHand = pointHands[0];
+    const anchorHand =
+      hands.find((hand) => hand.key !== rotationHand.key && hand.stableLabel === "Open") ?? null;
+    return { mode: "rotate", anchorHand, rotationHand };
   }
 
   return { mode: "none" };
+}
+
+function formatRevolutionProgress(current = 0, required = 1) {
+  const whole = Math.max(0, Math.floor(current));
+  return `${Math.min(whole, required)}/${required}`;
+}
+
+function mapHandsToLeftRightLabels(hands = [], getLabel = () => "Unknown") {
+  let left = "Unknown";
+  let right = "Unknown";
+  for (const hand of hands) {
+    const label = getLabel(hand);
+    const side = String(hand?.handedness ?? "").toLowerCase();
+    if (side.includes("left") && left === "Unknown") {
+      left = label;
+      continue;
+    }
+    if (side.includes("right") && right === "Unknown") {
+      right = label;
+      continue;
+    }
+    if (left === "Unknown") {
+      left = label;
+    } else if (right === "Unknown") {
+      right = label;
+    }
+  }
+  return { left, right };
 }
 
 async function bootstrap() {
@@ -537,6 +581,7 @@ async function bootstrap() {
   const oracleApp = document.querySelector(".oracle-app");
   const landingScreen = document.getElementById("landing-screen");
   const ritualScreen = document.getElementById("ritual-screen");
+  const landingSceneContainer = document.getElementById("landing-scene-root");
   const videoElement = document.getElementById("hand-video");
   const handOverlay = document.getElementById("hand-overlay");
   const sceneContainer = document.getElementById("scene-root");
@@ -544,12 +589,10 @@ async function bootstrap() {
   const questionInput = document.getElementById("question-input");
   const questionError = document.getElementById("question-error");
   const statusText = document.getElementById("status-text");
-  const handDetectionStatus = document.getElementById("hand-detection-status");
+  const handDetectionCard = document.getElementById("hand-detection-card");
   const hand1State = document.getElementById("hand1-state");
   const hand2State = document.getElementById("hand2-state");
   const activeModeText = document.getElementById("active-mode");
-  const rolePrimaryText = document.getElementById("role-primary");
-  const roleSecondaryText = document.getElementById("role-secondary");
   const profileCurrent = document.getElementById("profile-current");
   const profileConfidence = document.getElementById("profile-confidence");
   const metricCircularity = document.getElementById("metric-circularity");
@@ -568,27 +611,33 @@ async function bootstrap() {
   };
   const resultPanel = document.getElementById("result-panel");
   const resultQuestion = document.getElementById("result-question");
+  const resultVerdict = document.getElementById("result-verdict");
   const resultStar = document.getElementById("result-star");
+  const resultShortAnswer = document.getElementById("result-short-answer");
   const oracleAnswer = document.getElementById("oracle-answer");
   const againButton = document.getElementById("again-button");
+  const ritualOnboardingOverlay = document.getElementById("ritual-onboarding-overlay");
+  const summonOnboardingCard = document.getElementById("summon-onboarding-card");
+  const constellationOnboardingCard = document.getElementById("constellation-onboarding-card");
+  const summonOnboardingContinue = document.getElementById("summon-onboarding-continue");
+  const constellationOnboardingContinue = document.getElementById("constellation-onboarding-continue");
 
   if (
     !oracleApp ||
     !videoElement ||
     !landingScreen ||
     !ritualScreen ||
+    !landingSceneContainer ||
     !handOverlay ||
     !sceneContainer ||
     !beginButton ||
     !questionInput ||
     !questionError ||
     !statusText ||
-    !handDetectionStatus ||
+    !handDetectionCard ||
     !hand1State ||
     !hand2State ||
     !activeModeText ||
-    !rolePrimaryText ||
-    !roleSecondaryText ||
     !profileCurrent ||
     !profileConfidence ||
     !metricCircularity ||
@@ -601,9 +650,16 @@ async function bootstrap() {
     Object.values(profileRows).some((node) => !node) ||
     !resultPanel ||
     !resultQuestion ||
+    !resultVerdict ||
     !resultStar ||
+    !resultShortAnswer ||
     !oracleAnswer ||
-    !againButton
+    !againButton ||
+    !ritualOnboardingOverlay ||
+    !summonOnboardingCard ||
+    !constellationOnboardingCard ||
+    !summonOnboardingContinue ||
+    !constellationOnboardingContinue
   ) {
     throw new Error("Missing required DOM nodes for hand tracking or 3D scene.");
   }
@@ -617,6 +673,13 @@ async function bootstrap() {
   }
   const oracleEngine = createOracleEngine(oracleData);
   let sceneReady = true;
+  let landingSceneReady = true;
+  try {
+    initLandingStarfield(landingSceneContainer);
+  } catch (error) {
+    landingSceneReady = false;
+    console.error("Landing starfield initialization failed:", error);
+  }
   try {
     initThreeScene(sceneContainer);
     hideRitualCircle();
@@ -651,11 +714,76 @@ async function bootstrap() {
   let summonStyle = null;
   let lastSummonDebugLogMs = 0;
   let lastGesturePoint = null;
+  let summonPoseStableFrames = 0;
+  let summonFingertipMissingFrames = 0;
+  let summonPoseLatched = false;
+  let rotatePointLatchHandKey = null;
+  let rotatePointMissingFrames = 0;
+  let lastResolvedMode = "none";
+  let onboardingStep = "none";
+  let hasShownSummonIntro = false;
+  let hasShownNavigationIntro = false;
 
   function setStatus(message) {
     if (message === lastStatusText) return;
     lastStatusText = message;
     statusText.textContent = message;
+  }
+
+  function hideOnboardingCards() {
+    summonOnboardingCard.classList.add("is-hidden");
+    constellationOnboardingCard.classList.add("is-hidden");
+  }
+
+  function dismissOnboarding() {
+    onboardingStep = "none";
+    ritualOnboardingOverlay.classList.add("is-hidden");
+    hideOnboardingCards();
+  }
+
+  function showOnboarding(step) {
+    hideOnboardingCards();
+    onboardingStep = step;
+    ritualOnboardingOverlay.classList.remove("is-hidden");
+    if (step === "summon") {
+      summonOnboardingCard.classList.remove("is-hidden");
+      hasShownSummonIntro = true;
+      return;
+    }
+    constellationOnboardingCard.classList.remove("is-hidden");
+    hasShownNavigationIntro = true;
+  }
+
+  function getNavigationStatusLine({
+    handsCount = 0,
+    resolutionMode = "none",
+    hoveredStarId = null,
+    navigationLocked: isNavigationLocked = false,
+  }) {
+    if (onboardingStep === "navigation") {
+      return "Navigation intro active: review the modes, then press Continue.";
+    }
+    if (isNavigationLocked) {
+      return "Selection confirmed. Reading the sign...";
+    }
+    if (handsCount === 0) {
+      return "No hand detected. Show your hands to continue.";
+    }
+    if (resolutionMode === "zoom") {
+      return "Zoom mode: move your hands closer and farther away.";
+    }
+    if (resolutionMode === "rotate") {
+      return "Rotate mode: use a pointing hand to guide the constellation.";
+    }
+    if (resolutionMode === "pause") {
+      return hoveredStarId
+        ? "Pause mode: hold on the highlighted star to reveal."
+        : "Pause mode: make a fist with one hand and choose with the other.";
+    }
+    if (handsCount === 1) {
+      return "One hand detected. Add another hand or change gesture.";
+    }
+    return "Mode idle: use pinch, point, or fist + point.";
   }
 
   function formatMetric(value, digits = 2) {
@@ -697,6 +825,9 @@ async function bootstrap() {
 
   function transitionTo(phase, context = {}) {
     appState.setPhase(phase, context);
+    const showDetectionCard =
+      phase === PHASES.NAVIGATING || phase === PHASES.SELECTING || phase === PHASES.REVEALED;
+    handDetectionCard.classList.toggle("is-hidden", !showDetectionCard);
   }
 
   function setQuestionValidation(message = "") {
@@ -711,14 +842,14 @@ async function bootstrap() {
     ritualScreen.classList.add("is-hidden");
     resultPanel.hidden = true;
     videoElement.classList.remove("is-hidden");
-    handDetectionStatus.textContent = "";
     hand1State.textContent = "Unknown";
     hand2State.textContent = "Unknown";
     activeModeText.textContent = "None";
-    rolePrimaryText.textContent = "None";
-    roleSecondaryText.textContent = "None";
     updateProfileDebugPanel(null, null);
     drawHandOverlay({ canvas: handOverlay, hands: [], roles: {} });
+    if (landingSceneReady) {
+      setLandingStarfieldVisible(true);
+    }
   }
 
   function showRitualScreen() {
@@ -737,6 +868,9 @@ async function bootstrap() {
     videoElement.style.objectFit = "cover";
     // Scene container was hidden on load; force resize so renderer gets real dimensions.
     window.dispatchEvent(new Event("resize"));
+    if (landingSceneReady) {
+      setLandingStarfieldVisible(false);
+    }
     console.debug("[OrbitalOracle] Ritual screen shown.");
     const videoRect = videoElement.getBoundingClientRect();
     console.debug("[OrbitalOracle] Webcam element metrics", {
@@ -751,6 +885,9 @@ async function bootstrap() {
 
   function showResultPanel() {
     oracleApp.classList.add("results-active");
+    if (landingSceneReady) {
+      setLandingStarfieldVisible(true);
+    }
     resultPanel.hidden = false;
     window.requestAnimationFrame(() => {
       resultPanel.classList.add("is-visible");
@@ -767,10 +904,19 @@ async function bootstrap() {
     }, 650);
   }
 
+  function formatQuestionForResultDisplay(question = "") {
+    const trimmed = String(question ?? "").trim();
+    if (!trimmed) return "";
+    const withLeadingCap = `${trimmed.charAt(0).toUpperCase()}${trimmed.slice(1)}`;
+    return withLeadingCap.endsWith("?") ? withLeadingCap : `${withLeadingCap}?`;
+  }
+
   function applyReadingToUI({ question, reading }) {
-    resultQuestion.textContent = question;
-    resultStar.textContent = `${reading.title} (${reading.category})`;
-    oracleAnswer.textContent = reading.answerText;
+    resultQuestion.textContent = formatQuestionForResultDisplay(question);
+    resultVerdict.textContent = reading.verdict ?? "Unclear";
+    resultStar.textContent = reading.title;
+    resultShortAnswer.textContent = reading.shortAnswer ?? reading.answerText;
+    oracleAnswer.textContent = reading.interpretation ?? reading.answerText;
     resultPanel.style.setProperty("--result-accent", reading.color ?? "#b7a171");
   }
 
@@ -782,7 +928,7 @@ async function bootstrap() {
     });
 
     applyReadingToUI({ question, reading });
-    appState.setAnswer(reading.answerText);
+    appState.setAnswer(reading.shortAnswer ?? reading.answerText);
     transitionTo(PHASES.REVEALED, { starId, category: reading.category });
     setStatus("The reading is revealed.");
     if (sceneReady) {
@@ -816,6 +962,16 @@ async function bootstrap() {
     summonStyle = null;
     lastSummonDebugLogMs = 0;
     lastGesturePoint = null;
+    summonPoseStableFrames = 0;
+    summonFingertipMissingFrames = 0;
+    summonPoseLatched = false;
+    rotatePointLatchHandKey = null;
+    rotatePointMissingFrames = 0;
+    lastResolvedMode = "none";
+    onboardingStep = "none";
+    hasShownSummonIntro = false;
+    hasShownNavigationIntro = false;
+    dismissOnboarding();
     if (sceneReady) {
       constellationReady = false;
       setConstellationMotionPaused(false);
@@ -829,8 +985,6 @@ async function bootstrap() {
     hand1State.textContent = "Unknown";
     hand2State.textContent = "Unknown";
     activeModeText.textContent = "None";
-    rolePrimaryText.textContent = "None";
-    roleSecondaryText.textContent = "None";
     setStatus("");
     updateProfileDebugPanel(null, null);
     drawHandOverlay({ canvas: handOverlay, hands: [], roles: {} });
@@ -843,11 +997,8 @@ async function bootstrap() {
         setTargetingStar(starId, progress);
       }
       if (starId) {
-        setStatus("Hold to reveal its answer.");
-      } else {
-        setStatus(
-          "Pinch with both hands to zoom. Keep one hand open, then move the other hand's index finger to rotate. Make a fist with one hand to pause and use the other index finger to select.",
-        );
+        const pct = Math.round(progress * 100);
+        setStatus(`Selection mode active: hold to reveal (${pct}%).`);
       }
     },
     onSelected: (starId) => {
@@ -875,9 +1026,7 @@ async function bootstrap() {
     summonStyle = oracleEngine.classifySummon(summonMetrics);
 
     transitionTo(PHASES.SUMMONING, { confidence });
-    setStatus(
-      `Circle recognized (${summonStyle.profileLabel}). Summoning the oracle...`,
-    );
+    setStatus("Circle recognised. Summoning the oracle.");
     if (sceneReady) {
       lockSummonTrail();
     }
@@ -912,9 +1061,12 @@ async function bootstrap() {
       hoverDwellSelector.reset();
       navigationLocked = false;
       transitionTo(PHASES.NAVIGATING, { source: "summoning_complete" });
-      setStatus(
-        "Pinch with both hands to zoom. Keep one hand open, then move the other hand's index finger to rotate. Make a fist with one hand to pause and use the other index finger to select.",
-      );
+      if (!hasShownNavigationIntro) {
+        showOnboarding("navigation");
+        setStatus("You summoned the constellation. Review the controls and continue.");
+      } else {
+        setStatus("Mode ready: pinch to zoom, point to rotate.");
+      }
     }, SUMMONING_DELAY_MS);
   }
 
@@ -923,35 +1075,71 @@ async function bootstrap() {
     onFrame: ({ landmarks, hands = [], timestamp }) => {
       appState.setHandFrame(landmarks);
       const phase = appState.getState().phase;
-      handDetectionStatus.textContent = hands.length > 0 ? "Hand detected" : "No hand detected";
 
       if (phase !== PHASES.NAVIGATING) {
+        rotatePointLatchHandKey = null;
+        rotatePointMissingFrames = 0;
         const simpleHands = hands.map((hand, index) => ({
           ...hand,
           key: hand.handedness ?? `hand-${index}`,
           landmarks: hand.landmarks,
         }));
         drawHandOverlay({ canvas: handOverlay, hands: simpleHands, roles: {} });
-        hand1State.textContent = simpleHands[0] ? classifyHandRaw(simpleHands[0].landmarks) : "Unknown";
-        hand2State.textContent = simpleHands[1] ? classifyHandRaw(simpleHands[1].landmarks) : "Unknown";
+        const mapped = mapHandsToLeftRightLabels(
+          simpleHands,
+          (hand) => classifyHandRaw(hand.landmarks) || "Unknown",
+        );
+        hand1State.textContent = mapped.left;
+        hand2State.textContent = mapped.right;
         activeModeText.textContent = "None";
-        rolePrimaryText.textContent = "None";
-        roleSecondaryText.textContent = "None";
       }
 
       if (phase === PHASES.AWAITING_GESTURE) {
+        if (onboardingStep === "summon") {
+          setStatus("Summon intro active: press Begin to start.");
+          return;
+        }
         if (hands.length > 1) {
-          setStatus("Use one hand only. Draw a single circle with your index and middle fingers.");
+          setStatus("Show only one hand.");
           return;
         }
         const activeHand = hands.length === 1 ? hands[0] : null;
+        const activeHandLabel = activeHand ? classifyHandRaw(activeHand.landmarks) : "Unknown";
         const indexTip = activeHand?.landmarks?.[8] ?? null;
         const middleTip = activeHand?.landmarks?.[12] ?? null;
-        if (!indexTip) {
-          setStatus(SUMMON_INSTRUCTION);
+        const hasSummonFingertips = indexTip != null && middleTip != null;
+        const isSummonPoseActive =
+          activeHandLabel === "Summon" && hasSummonFingertips;
+
+        // Summon remains strict, but brief frame drops are tolerated to keep drawing smooth.
+        if (isSummonPoseActive) {
+          summonPoseStableFrames += 1;
+          summonFingertipMissingFrames = 0;
+          if (!summonPoseLatched && summonPoseStableFrames >= SUMMON_POSE_HOLD_FRAMES) {
+            summonPoseLatched = true;
+          }
+        } else {
+          summonPoseStableFrames = 0;
+        }
+
+        if (!summonPoseLatched) {
+          setStatus(hands.length === 0 ? "No hand detected." : SUMMON_INSTRUCTION);
           updateProfileDebugPanel(null, null);
           return;
         }
+        // After strict entry, continue drawing while fingertips remain trackable.
+        if (!hasSummonFingertips) {
+          summonFingertipMissingFrames += 1;
+          if (summonFingertipMissingFrames > SUMMON_FINGERTIP_GRACE_FRAMES) {
+            summonPoseLatched = false;
+            summonFingertipMissingFrames = 0;
+            lastGesturePoint = null;
+            setStatus("No hand detected.");
+            updateProfileDebugPanel(null, null);
+          }
+          return;
+        }
+        summonFingertipMissingFrames = 0;
         const sampleTimestamp = Number.isFinite(timestamp) ? timestamp : performance.now();
         const indexClient = normalizedToClientPoint(indexTip, sceneContainer);
         const middleClient = normalizedToClientPoint(middleTip, sceneContainer);
@@ -983,8 +1171,12 @@ async function bootstrap() {
         });
         const styleHint = oracleEngine.classifySummon(result.metrics ?? null);
         updateProfileDebugPanel(result.metrics ?? null, styleHint);
+        const revolutionProgress = formatRevolutionProgress(
+          result.metrics?.revolutions ?? 0,
+          MIN_REVOLUTIONS_REQUIRED,
+        );
         setStatus(
-          `${SUMMON_INSTRUCTION} Revolutions: ${revolutions.toFixed(2)}/${MIN_REVOLUTIONS_REQUIRED}. Summon clarity: ${Math.round(result.confidence * 100)}% (${styleHint.profileLabel}).`,
+          `Circle in progress: ${revolutionProgress} revolutions.`,
         );
 
         if (sampleTimestamp - lastSummonDebugLogMs >= SUMMON_DEBUG_LOG_INTERVAL_MS) {
@@ -1035,20 +1227,71 @@ async function bootstrap() {
           };
         });
 
-        hand1State.textContent = normalizedHands[0]?.stableLabel ?? "Unknown";
-        hand2State.textContent = normalizedHands[1]?.stableLabel ?? "Unknown";
+        const mapped = mapHandsToLeftRightLabels(
+          normalizedHands,
+          (hand) => hand.stableLabel ?? "Unknown",
+        );
+        hand1State.textContent = mapped.left;
+        hand2State.textContent = mapped.right;
 
         const resolution = resolveInteractionMode(normalizedHands);
         let roles = {};
         let hoveredStarId = null;
+        let effectiveResolution = resolution;
+        let modeReason = "direct-resolver";
+
+        // Higher-priority modes must always override rotate stickiness immediately.
+        if (resolution.mode === "pause" || resolution.mode === "zoom") {
+          rotatePointLatchHandKey = null;
+          rotatePointMissingFrames = 0;
+        } else if (resolution.mode === "rotate" && resolution.rotationHand?.key) {
+          rotatePointLatchHandKey = resolution.rotationHand.key;
+          rotatePointMissingFrames = 0;
+          modeReason = "direct-rotate";
+        } else if (resolution.mode === "none" && rotatePointLatchHandKey) {
+          // Sticky continuation only during ambiguity, never over a valid new mode.
+          const latchedHand =
+            normalizedHands.find((hand) => hand.key === rotatePointLatchHandKey) ?? null;
+          if (latchedHand?.indexTip) {
+            rotatePointMissingFrames = 0;
+            effectiveResolution = {
+              mode: "rotate",
+              anchorHand: null,
+              rotationHand: latchedHand,
+            };
+            modeReason = "rotate-sticky-fingertip";
+          } else {
+            rotatePointMissingFrames += 1;
+            modeReason = "rotate-sticky-grace";
+            if (rotatePointMissingFrames > ROTATE_POINT_GRACE_FRAMES) {
+              rotatePointLatchHandKey = null;
+              rotatePointMissingFrames = 0;
+              modeReason = "rotate-sticky-expired";
+            }
+          }
+        } else {
+          rotatePointLatchHandKey = null;
+          rotatePointMissingFrames = 0;
+        }
+
+        if (effectiveResolution.mode !== lastResolvedMode) {
+          console.debug("[Mode Switch]", {
+            from: lastResolvedMode,
+            to: effectiveResolution.mode,
+            baseMode: resolution.mode,
+            reason: modeReason,
+            latchedRotateHand: rotatePointLatchHandKey,
+          });
+          lastResolvedMode = effectiveResolution.mode;
+        }
 
         // Mode priority is centralized in resolveInteractionMode.
-        if (resolution.mode === "pause") {
+        if (effectiveResolution.mode === "pause") {
           if (lastControlMode !== "Pause") {
             zoomController.reset();
             rotationController.reset();
           }
-          const { pauseHand, selectionHand } = resolution;
+          const { pauseHand, selectionHand } = effectiveResolution;
           roles = {
             pauseHandKey: pauseHand?.key ?? null,
             selectionHandKey: selectionHand?.key ?? null,
@@ -1061,37 +1304,17 @@ async function bootstrap() {
           const clientPoint = normalizedToClientPoint(selectionHand?.indexTip ?? null, sceneContainer);
           hoveredStarId =
             sceneReady && clientPoint ? getHoveredStar(clientPoint.clientX, clientPoint.clientY) : null;
-          const mirroredPoint = selectionHand?.indexTip
-            ? { x: 1 - selectionHand.indexTip.x, y: selectionHand.indexTip.y }
-            : null;
-          handDetectionStatus.textContent = `Hand detected | Select: ${
-            mirroredPoint ? `${mirroredPoint.x.toFixed(2)}, ${mirroredPoint.y.toFixed(2)}` : "--"
-          } | Hover: ${hoveredStarId ?? "none"} | ${normalizedHands
-            .slice(0, 2)
-            .map((hand, index) => {
-              const metrics = hand.debugMetrics;
-              if (!metrics) return `H${index + 1}:${hand.stableLabel}`;
-              const pinch =
-                typeof metrics.pinchDistance === "number" ? metrics.pinchDistance.toFixed(3) : "--";
-              return `H${index + 1}:${hand.stableLabel} idx:${metrics.indexExtended ? "Y" : "N"} curl:${
-                metrics.curledOthers
-              } pinch:${pinch}`;
-            })
-            .join(" | ")}`;
-          if (!hoveredStarId) {
-            setStatus("Constellation held. Use your other hand to choose a star.");
-          }
-        } else if (resolution.mode === "zoom") {
+        } else if (effectiveResolution.mode === "zoom") {
           if (lastControlMode !== "Zoom") {
             zoomController.reset();
             rotationController.reset();
           }
-          const [handA, handB] = resolution.zoomHands;
+          const [handA, handB] = effectiveResolution.zoomHands;
           roles = {
             zoomHandAKey: handA.key,
             zoomHandBKey: handB.key,
           };
-          if (!navigationLocked && sceneReady) {
+          if (!navigationLocked && onboardingStep !== "navigation" && sceneReady) {
             setConstellationMotionPaused(false);
             const zoom = zoomController.update({
               pointA: handA.pinchPoint ?? handA.palm,
@@ -1099,19 +1322,24 @@ async function bootstrap() {
             });
             zoomConstellation(zoom.zoomDelta);
           }
-        } else if (resolution.mode === "rotate") {
+        } else if (effectiveResolution.mode === "rotate") {
           if (lastControlMode !== "Rotate") {
             zoomController.reset();
             rotationController.reset();
           }
-          const openEnabler = resolution.openHand;
-          const rotationControl = resolution.rotationHand;
+          const anchorHand = effectiveResolution.anchorHand;
+          const rotationControl = effectiveResolution.rotationHand;
           roles = {
-            openEnablerKey: openEnabler.key,
+            openEnablerKey: anchorHand?.key ?? null,
             rotationControlKey: rotationControl?.key ?? null,
           };
 
-          if (!navigationLocked && sceneReady && rotationControl?.indexTip) {
+          if (
+            !navigationLocked &&
+            onboardingStep !== "navigation" &&
+            sceneReady &&
+            rotationControl?.indexTip
+          ) {
             setConstellationMotionPaused(false);
             const rotate = rotationController.update({
               controlPoint: rotationControl.indexTip,
@@ -1129,59 +1357,17 @@ async function bootstrap() {
           rotationController.reset();
         }
         const activeMode =
-          resolution.mode === "pause"
+          effectiveResolution.mode === "pause"
             ? "Pause"
-            : resolution.mode === "zoom"
+            : effectiveResolution.mode === "zoom"
               ? "Zoom"
-              : resolution.mode === "rotate"
+              : effectiveResolution.mode === "rotate"
                 ? "Rotate"
                 : "None";
 
-        if (resolution.mode !== "pause") {
-          handDetectionStatus.textContent =
-            normalizedHands.length === 0
-              ? "No hand detected"
-              : normalizedHands
-                  .slice(0, 2)
-                  .map((hand, index) => {
-                    const metrics = hand.debugMetrics;
-                    if (!metrics) return `H${index + 1}:${hand.stableLabel}`;
-                    const pinch =
-                      typeof metrics.pinchDistance === "number" ? metrics.pinchDistance.toFixed(3) : "--";
-                    return `H${index + 1}:${hand.stableLabel} idx:${metrics.indexExtended ? "Y" : "N"} curl:${
-                      metrics.curledOthers
-                    } pinch:${pinch}`;
-                  })
-                  .join(" | ");
-        }
         lastControlMode = activeMode;
 
         activeModeText.textContent = activeMode;
-        rolePrimaryText.textContent =
-          activeMode === "Pause"
-            ? `Pause hand: ${resolution.pauseHand?.handedness ?? resolution.pauseHand?.key ?? "Unknown"}`
-            : activeMode === "Zoom"
-              ? `Zoom hand A: ${
-                  resolution.zoomHands?.[0]?.handedness ?? resolution.zoomHands?.[0]?.key ?? "Unknown"
-                }`
-              : activeMode === "Rotate"
-                ? `Open hand: ${resolution.openHand?.handedness ?? resolution.openHand?.key ?? "Unknown"}`
-                : "None";
-        roleSecondaryText.textContent =
-          activeMode === "Pause"
-            ? `Selection hand: ${
-                resolution.selectionHand?.handedness ??
-                resolution.selectionHand?.key ??
-                "None"
-              }`
-            : activeMode === "Zoom"
-              ? `Zoom hand B: ${
-                  resolution.zoomHands?.[1]?.handedness ?? resolution.zoomHands?.[1]?.key ?? "Unknown"
-                }`
-              : activeMode === "Rotate"
-                ? `Rotation hand: ${resolution.rotationHand?.handedness ?? resolution.rotationHand?.key ?? "None"}`
-                : "None";
-
         drawHandOverlay({
           canvas: handOverlay,
           hands: normalizedHands,
@@ -1189,17 +1375,45 @@ async function bootstrap() {
         });
 
         hoverDwellSelector.update({
-          starId: resolution.mode === "pause" ? hoveredStarId : null,
+          starId:
+            onboardingStep === "navigation"
+              ? null
+              : effectiveResolution.mode === "pause"
+                ? hoveredStarId
+                : null,
           timestamp,
         });
 
-        if (appState.getState().selectedStarId && !navigationLocked) {
+        if (
+          appState.getState().selectedStarId &&
+          !navigationLocked &&
+          onboardingStep !== "navigation"
+        ) {
           navigationLocked = true;
           zoomController.reset();
           rotationController.reset();
         }
+
+        setStatus(
+          getNavigationStatusLine({
+            handsCount: normalizedHands.length,
+            resolutionMode: effectiveResolution.mode,
+            hoveredStarId,
+            navigationLocked,
+          }),
+        );
       }
     },
+  });
+
+  summonOnboardingContinue.addEventListener("click", () => {
+    dismissOnboarding();
+    setStatus(SUMMON_INSTRUCTION);
+  });
+
+  constellationOnboardingContinue.addEventListener("click", () => {
+    dismissOnboarding();
+    setStatus("Mode ready: pinch to zoom, point to rotate.");
   });
 
   beginButton.addEventListener("click", async (event) => {
@@ -1224,7 +1438,12 @@ async function bootstrap() {
     console.debug("[OrbitalOracle] About to switch UI state.");
     showRitualScreen();
     transitionTo(PHASES.AWAITING_GESTURE, { reason: "begin_ritual_clicked" });
-    setStatus(SUMMON_INSTRUCTION);
+    if (!hasShownSummonIntro) {
+      showOnboarding("summon");
+      setStatus("Summon intro active: press Begin to start.");
+    } else {
+      setStatus(SUMMON_INSTRUCTION);
+    }
 
     try {
       console.debug("[OrbitalOracle] About to start webcam/hand tracking.");
